@@ -232,6 +232,19 @@ try:
 except Exception as e:
     st.error(f"Impossible de lire ce fichier Excel : {e}")
     st.stop()
+
+# Sécurité de compatibilité : après un redémarrage ou avec un cache Streamlit
+# provenant d'une ancienne version, la colonne calculée peut être absente.
+# On la recalcule ici avant d'appliquer le filtre Type d'enseignement.
+if "_type_enseignement" not in df.columns:
+    df = df.copy()
+    df["_type_enseignement"] = df.apply(_type_enseignement, axis=1)
+else:
+    type_vide = df["_type_enseignement"].isna() | (df["_type_enseignement"].astype(str).str.strip() == "")
+    if type_vide.any():
+        df = df.copy()
+        df.loc[type_vide, "_type_enseignement"] = df.loc[type_vide].apply(_type_enseignement, axis=1)
+
 records_all = _records(df)
 promotions = sorted([x for x in df["Promotion"].unique() if x], key=str.casefold)
 departements = sorted([x for x in df["Département"].unique() if x], key=str.casefold)
