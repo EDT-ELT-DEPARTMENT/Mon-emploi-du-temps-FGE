@@ -294,13 +294,13 @@ if st.session_state.get("edt_tv_preview",False):
     if not filtered_records: st.warning("Aucune séance ne correspond aux filtres actuels.")
     else:
         st.subheader("📺 Aperçu de l’affichage TV")
-        tv_html=_page_html(filtered_records,"Emploi du temps — UDL-SBA",filtres_txt,filters=False,speed=vitesse,autoplay=True,layout=affichage)
+        tv_html=_page_html(filtered_records,"Emploi du temps — Faculté de génie électrique - UDL-SBA",filtres_txt,filters=False,speed=vitesse,autoplay=True,layout=affichage)
         components.html(tv_html,height=760,scrolling=False)
         st.caption("Ouvrez cette application dans le navigateur de la TV puis passez en plein écran (F11). L’aperçu défile automatiquement.")
 st.divider()
 st.subheader("💾 Télécharger l’affichage pour TV")
 st.write("Le fichier HTML autonome contient toutes les lignes du fichier Excel chargé. Copiez-le sur une clé USB et ouvrez-le dans le navigateur de la TV ou d’un ordinateur relié à la TV. Il fonctionne hors ligne.")
-usb_html=_page_html(records_all,"Emploi du temps — UDL-SBA","Sélectionnez le jour, l’horaire, la promotion, le département et le type d’enseignement sur cet écran TV.",filters=True,speed=vitesse,autoplay=True,layout="Liste défilante")
+usb_html=_page_html(records_all,"Emploi du temps — Faculté de génie électrique - UDL-SBA","Sélectionnez le jour, l’horaire, la promotion, le département et le type d’enseignement sur cet écran TV.",filters=True,speed=vitesse,autoplay=True,layout="Liste défilante")
 st.download_button("📥 Télécharger le fichier HTML autonome pour clé USB",data=usb_html.encode("utf-8"),file_name="EDT_TV_USB.html",mime="text/html",type="primary")
 st.download_button("📥 Télécharger les données Excel chargées",data=data_bytes,file_name=Path(source_name or "EDT.xlsx").name,mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 with st.expander("ℹ️ Mise en ligne pour obtenir un lien web permanent"):
