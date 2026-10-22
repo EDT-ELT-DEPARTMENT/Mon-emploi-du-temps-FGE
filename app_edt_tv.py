@@ -54,6 +54,21 @@ def _minutes_debut(value: Any) -> int:
     match = re.search(r"(\d{1,2})\s*h\s*(\d{0,2})", _normaliser_horaire(value), flags=re.I)
     return int(match.group(1))*60 + int(match.group(2) or 0) if match else 10**8
 
+# Classement par heure de début : Matin = 08h00–12h30 ; Après-midi = 12h30–17h00.
+# La borne de fin est exclue : une séance commençant à 12h30 appartient à l'après-midi.
+PERIODES_HORAIRES = {
+    "Matin": (8 * 60, 12 * 60 + 30),
+    "Après-midi": (12 * 60 + 30, 17 * 60),
+}
+CHOIX_PERIODES_HORAIRES = list(PERIODES_HORAIRES)
+
+def _horaire_dans_periode(horaire: Any, periode: str) -> bool:
+    limites = PERIODES_HORAIRES.get(periode)
+    if limites is None:
+        return False
+    debut = _minutes_debut(horaire)
+    return limites[0] <= debut < limites[1]
+
 def _jour_index(value: Any) -> int:
     v = _sans_accents(value)
     for i, day in enumerate(JOURS_ORDRE):
@@ -193,6 +208,7 @@ const board=document.getElementById('board'), statusEl=document.getElementById('
 function esc(s){{return String(s??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));}}
 function dayIndex(s){{let n=String(s||'').toLowerCase();return DAYS.findIndex(d=>d.toLowerCase()===n);}}
 function timeStart(s){{let m=String(s||'').match(/(\\d{{1,2}})\\s*h\\s*(\\d{{0,2}})/i);return m?Number(m[1])*60+Number(m[2]||0):99999;}}
+function timeMatches(value,selected){{let t=timeStart(value);if(selected==='Matin')return t>=480&&t<750;if(selected==='Après-midi')return t>=750&&t<1020;return value===selected;}}
 function natural(a,b){{return String(a).localeCompare(String(b),'fr',{{numeric:true,sensitivity:'base'}});}}
 function uniqueSorted(key, order){{let vals=[...new Set(DATA.map(r=>String(r[key]||'').trim()).filter(Boolean))];if(order)vals.sort((a,b)=>timeStart(a)-timeStart(b)||natural(a,b));else if(key==='Jours')vals.sort((a,b)=>(dayIndex(a)+100)-(dayIndex(b)+100)||natural(a,b));else vals.sort(natural);return vals;}}
 function fillSelect(id, first, vals){{let el=document.getElementById(id);if(!el)return;el.innerHTML='';let opt=document.createElement('option');opt.value='';opt.textContent=first;el.appendChild(opt);vals.forEach(v=>{{let o=document.createElement('option');o.value=v;o.textContent=v;el.appendChild(o);}});}}
@@ -201,9 +217,9 @@ function card(r){{let k=kind(r).toLowerCase();return `<article class="card ${{k}
 function renderList(rows){{if(!rows.length){{board.innerHTML='<div class="empty">Aucun enseignement ne correspond aux filtres sélectionnés.</div>';return;}}let html='',lastDay='',lastHour='';rows.forEach((r,i)=>{{if(r.Jours!==lastDay){{lastDay=r.Jours;lastHour='';html+=`<h2 class="day-heading">${{esc(lastDay)}}</h2>`;}}if(r.Horaire!==lastHour){{lastHour=r.Horaire;html+=`<h3 class="hour-heading">⏰ ${{esc(lastHour)}}</h3><div class="cards">`;}}html+=card(r);let next=rows[i+1];if(!next||next.Jours!==lastDay||next.Horaire!==lastHour)html+='</div>';}});board.innerHTML=html;}}
 function renderGrid(rows){{if(!rows.length){{board.innerHTML='<div class="empty">Aucun enseignement ne correspond aux filtres sélectionnés.</div>';return;}}let days=[...new Set(rows.map(r=>r.Jours))].sort((a,b)=>(dayIndex(a)+100)-(dayIndex(b)+100));let hours=[...new Set(rows.map(r=>r.Horaire))].sort((a,b)=>timeStart(a)-timeStart(b)||natural(a,b));let html='<table class="grid-table"><thead><tr><th>Créneau</th>'+days.map(d=>`<th>${{esc(d)}}</th>`).join('')+'</tr></thead><tbody>';hours.forEach(h=>{{html+=`<tr><th>${{esc(h)}}</th>`;days.forEach(d=>{{let cell=rows.filter(r=>r.Horaire===h&&r.Jours===d);html+='<td>'+cell.map(r=>`<div class="grid-item"><strong>${{esc(r.Enseignements)}}</strong><small>${{esc(r.Code)}} · ${{esc(r.Promotion)}}<br>${{esc(r.Enseignants)}}<br>${{esc(r.Lieu)}} · ${{esc(r.Département)}}</small></div>`).join('')+'</td>';}});html+='</tr>';}});html+='</tbody></table>';board.innerHTML=html;}}
 function kindsForSelection(){{let choice=document.getElementById('f-kind')?.value||'';if(!choice)return ['Cours','TD','TP'];if(choice.includes('+'))return choice.split('+').map(x=>x.trim());return [choice];}}
-function getFilteredRows(){{let day=document.getElementById('f-day')?.value||'',tm=document.getElementById('f-time')?.value||'',pr=document.getElementById('f-promo')?.value||'',de=document.getElementById('f-dept')?.value||'',types=kindsForSelection();return DATA.filter(r=>(!day||r.Jours===day)&&(!tm||r.Horaire===tm)&&(!pr||r.Promotion===pr)&&(!de||r.Département===de)&&types.includes(kind(r))).sort((a,b)=>(dayIndex(a.Jours)+100)-(dayIndex(b.Jours)+100)||timeStart(a.Horaire)-timeStart(b.Horaire)||natural(a.Promotion,b.Promotion)||natural(a.Enseignements,b.Enseignements));}}
+function getFilteredRows(){{let day=document.getElementById('f-day')?.value||'',tm=document.getElementById('f-time')?.value||'',pr=document.getElementById('f-promo')?.value||'',de=document.getElementById('f-dept')?.value||'',types=kindsForSelection();return DATA.filter(r=>(!day||r.Jours===day)&&(!tm||timeMatches(r.Horaire,tm))&&(!pr||r.Promotion===pr)&&(!de||r.Département===de)&&types.includes(kind(r))).sort((a,b)=>(dayIndex(a.Jours)+100)-(dayIndex(b.Jours)+100)||timeStart(a.Horaire)-timeStart(b.Horaire)||natural(a.Promotion,b.Promotion)||natural(a.Enseignements,b.Enseignements));}}
 function updateRender(){{let rows=getFilteredRows();if(activeLayout==='grid')renderGrid(rows);else renderList(rows);statusEl.textContent=rows.length.toLocaleString('fr-FR')+' séance(s) affichée(s)';board.scrollTop=0;}}
-if(document.getElementById('f-day')){{fillSelect('f-day','Tous les jours',uniqueSorted('Jours'));fillSelect('f-time','Tous les créneaux',uniqueSorted('Horaire',true));fillSelect('f-promo','Toutes les promotions',uniqueSorted('Promotion'));fillSelect('f-dept','Tous les départements',uniqueSorted('Département'));fillSelect('f-kind','Tous les enseignements',['Cours','TD','TP','Cours + TD','TD + TP','Cours + TP']);document.getElementById('apply').addEventListener('click',updateRender);['f-day','f-time','f-promo','f-dept','f-kind'].forEach(id=>document.getElementById(id).addEventListener('change',updateRender));}}
+if(document.getElementById('f-day')){{fillSelect('f-day','Tous les jours',uniqueSorted('Jours'));fillSelect('f-time','Tous les créneaux',['Matin','Après-midi',...uniqueSorted('Horaire',true)]);fillSelect('f-promo','Toutes les promotions',uniqueSorted('Promotion'));fillSelect('f-dept','Tous les départements',uniqueSorted('Département'));fillSelect('f-kind','Tous les enseignements',['Cours','TD','TP','Cours + TD','TD + TP','Cours + TP']);document.getElementById('apply').addEventListener('click',updateRender);['f-day','f-time','f-promo','f-dept','f-kind'].forEach(id=>document.getElementById(id).addEventListener('change',updateRender));}}
 let speedEl=document.getElementById('speed');if(speedEl){{speedEl.value=INITIAL_SPEED;speedEl.addEventListener('input',()=>{{speed=Number(speedEl.value);}});}}
 let viewEl=document.getElementById('view');if(viewEl){{viewEl.value=activeLayout;viewEl.addEventListener('change',()=>{{activeLayout=viewEl.value;updateRender();}});}}
 let pauseBtn=document.getElementById('pauseBtn');if(pauseBtn)pauseBtn.addEventListener('click',()=>{{stopped=!stopped;pauseBtn.textContent=stopped?'▶ Reprendre':'⏸ Pause';}});
@@ -261,7 +277,7 @@ st.caption(f"Fichier source : {source_name} · Le classeur original n'est jamais
 st.subheader("🎛️ Choisir l’EDT à afficher")
 c1,c2,c3,c4=st.columns([1,1.45,1.35,1])
 with c1: jour_sel=st.selectbox("Jour",[TOUS_JOURS]+jours,index=0)
-with c2: creneaux_sel=st.multiselect("Créneau(x) horaire(s)",[TOUS_CRENEAUX]+horaires,default=[TOUS_CRENEAUX],help="Choisissez un ou plusieurs créneaux, ou laissez « Tous les créneaux ».")
+with c2: creneaux_sel=st.multiselect("Créneau(x) horaire(s)",[TOUS_CRENEAUX]+CHOIX_PERIODES_HORAIRES+horaires,default=[TOUS_CRENEAUX],help="Matin : séances débutant entre 08h00 et 12h30. Après-midi : séances débutant entre 12h30 et 17h00. Vous pouvez aussi choisir des créneaux précis.")
 with c3: promo_sel=st.selectbox("Promotion",[TOUTES_PROMOTIONS]+promotions,index=0)
 with c4: dept_sel=st.selectbox("Département",[TOUS_DEPARTEMENTS]+departements,index=0)
 c5,c6,c7,c8=st.columns([1.45,1.15,1,1.35])
@@ -275,7 +291,12 @@ with c7: vitesse=st.slider("Vitesse du défilement",5,80,24,5,help="Pixels par s
 with c8: lancer=st.button("📺 Afficher / actualiser la TV",type="primary",use_container_width=True)
 filtered=df.copy()
 if jour_sel != TOUS_JOURS: filtered=filtered[filtered["Jours"]==jour_sel]
-if creneaux_sel and TOUS_CRENEAUX not in creneaux_sel: filtered=filtered[filtered["Horaire"].isin(creneaux_sel)]
+if creneaux_sel and TOUS_CRENEAUX not in creneaux_sel:
+    horaires_selectionnes = {h for h in creneaux_sel if h in horaires}
+    for periode in CHOIX_PERIODES_HORAIRES:
+        if periode in creneaux_sel:
+            horaires_selectionnes.update(h for h in horaires if _horaire_dans_periode(h, periode))
+    filtered=filtered[filtered["Horaire"].isin(horaires_selectionnes)]
 if promo_sel != TOUTES_PROMOTIONS: filtered=filtered[filtered["Promotion"]==promo_sel]
 if dept_sel != TOUS_DEPARTEMENTS: filtered=filtered[filtered["Département"]==dept_sel]
 types_a_afficher=_types_a_afficher(type_sel,types_personnalises)
