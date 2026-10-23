@@ -4,7 +4,8 @@ Application d'affichage des emplois du temps sur TV, navigateur et clé USB.
 Lancement local : streamlit run app_edt_tv.py
 """
 from __future__ import annotations
-import io, json, re, unicodedata, html as htmlmod
+import io, json, re, unicodedata, html as htmlmod, base64, mimetypes, uuid, hmac, os
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 import pandas as pd
@@ -21,6 +22,16 @@ CHOIX_TYPES_ENSEIGNEMENT = [
     "Tous les enseignements", "Cours", "TD", "TP",
     "Cours + TD", "TD + TP", "Cours + TP", "Sélection personnalisée",
 ]
+
+# Rubrique Actualités / Annonces / Avis. Les fichiers restent dans le dossier de l'application.
+APP_DIR = Path(__file__).resolve().parent
+FICHIER_PUBLICATIONS = APP_DIR / "publications_edt.json"
+DOSSIER_MEDIAS_PUBLICATIONS = APP_DIR / "publications_medias"
+CATEGORIES_PUBLICATION = ["News / Actualité", "Annonce", "Avis"]
+PUBLICS_PUBLICATION = ["Étudiants", "Enseignants", "Étudiants et enseignants"]
+EXTENSIONS_PUBLICATION = ["png", "jpg", "jpeg", "webp", "gif", "pdf", "txt", "doc", "docx", "xls", "xlsx", "ppt", "pptx"]
+TAILLE_MAX_PIECE_JOINTE = 4 * 1024 * 1024  # 4 Mo par pièce jointe
+TAILLE_MAX_MEDIAS_HTML = 8 * 1024 * 1024  # limite d'intégration des pièces jointes dans le HTML autonome
 
 st.set_page_config(page_title=APP_TITLE, page_icon="📺", layout="wide", initial_sidebar_state="expanded")
 st.markdown("""
@@ -155,8 +166,90 @@ def _records(df: pd.DataFrame) -> list[dict]:
 def _json_safe(records: list[dict]) -> str:
     return json.dumps(records, ensure_ascii=False, separators=(",",":")).replace("</","<\\/")
 
-def _page_html(records: list[dict], title: str, subtitle: str, *, filters: bool, speed: int = 24, autoplay: bool = True, layout: str = "Liste défilante", selected_teachers: list[str] | None = None) -> str:
+
+def _mot_de_passe_admin_publications() -> str:
+    """Mot de passe fourni par Streamlit Secrets ou par variable d'environnement."""
+    mot = os.environ.get("PUBLICATION_ADMIN_PASSWORD", "").strip()
+    try:
+        mot_secret = str(st.secrets.get("PUBLICATION_ADMIN_PASSWORD", "")).strip()
+        if mot_secret:
+            mot = mot_secret
+    except Exception:
+        pass
+    return mot
+
+def _charger_publications() -> list[dict]:
+    """Charge les publications sauvegardées sur le disque de l'application."""
+    try:
+        if not FICHIER_PUBLICATIONS.exists():
+            return []
+        contenu = json.loads(FICHIER_PUBLICATIONS.read_text(encoding="utf-8"))
+        return contenu if isinstance(contenu, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+def _sauvegarder_publications(publications: list[dict]) -> None:
+    FICHIER_PUBLICATIONS.parent.mkdir(parents=True, exist_ok=True)
+    temporaire = FICHIER_PUBLICATIONS.with_suffix(".json.tmp")
+    temporaire.write_text(json.dumps(publications, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporaire.replace(FICHIER_PUBLICATIONS)
+
+def _chemin_piece_jointe(publication: dict) -> Path | None:
+    relatif = str(publication.get("attachment_path", "")).strip()
+    if not relatif:
+        return None
+    base = APP_DIR.resolve()
+    chemin = (APP_DIR / relatif).resolve()
+    if chemin == base or base not in chemin.parents:
+        return None
+    return chemin if chemin.is_file() else None
+
+def _publication_en_cours(publication: dict, aujourd_hui: date | None = None) -> bool:
+    if not publication.get("active", True):
+        return False
+    aujourd_hui = aujourd_hui or date.today()
+    fin = str(publication.get("expires_on", "")).strip()
+    if fin:
+        try:
+            if date.fromisoformat(fin) < aujourd_hui:
+                return False
+        except ValueError:
+            pass
+    return True
+
+def _publications_pour_html(publications: list[dict]) -> list[dict]:
+    """Prépare les annonces actives et intègre les pièces jointes dans le HTML hors ligne."""
+    result: list[dict] = []
+    poids_integre = 0
+    for pub in publications:
+        if not _publication_en_cours(pub):
+            continue
+        item = {
+            "category": str(pub.get("category", "Avis")),
+            "audience": str(pub.get("audience", "Étudiants et enseignants")),
+            "title": str(pub.get("title", "")),
+            "body": str(pub.get("body", "")),
+            "created_at": str(pub.get("created_at", "")),
+            "attachment_name": str(pub.get("attachment_name", "")),
+            "attachment_data": "",
+            "attachment_mime": str(pub.get("attachment_mime", "application/octet-stream")),
+        }
+        path = _chemin_piece_jointe(pub)
+        if path:
+            taille = path.stat().st_size
+            if poids_integre + taille <= TAILLE_MAX_MEDIAS_HTML:
+                mime = item["attachment_mime"] or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+                item["attachment_mime"] = mime
+                item["attachment_data"] = "data:" + mime + ";base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+                poids_integre += taille
+            else:
+                item["attachment_name"] = ""  # évite un lien cassé dans le HTML hors ligne
+        result.append(item)
+    return result
+
+def _page_html(records: list[dict], title: str, subtitle: str, *, filters: bool, speed: int = 24, autoplay: bool = True, layout: str = "Liste défilante", selected_teachers: list[str] | None = None, publications: list[dict] | None = None) -> str:
     data_js = _json_safe(records)
+    news_js = _json_safe(_publications_pour_html(publications or []))
     filter_markup = ""
     if filters:
         filter_markup = """
@@ -207,6 +300,18 @@ button{{background:#0ea5e9;color:#001a2a;border:none;border-radius:8px;padding:1
 .tools{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 22px;background:#081322;border-bottom:1px solid #263b54}}
 .tools button{{padding:7px 11px;font-size:13px}} .speed-label,.view-label{{flex-direction:row;align-items:center}} input[type=range]{{width:120px}}
 .status{{margin-left:auto;color:#cbd5e1;font-weight:700;font-size:14px}}
+.news-panel{{display:flex;align-items:center;gap:18px;flex:0 0 auto;padding:10px 22px;background:linear-gradient(110deg,#422006,#78350f 48%,#1e293b);border-bottom:2px solid #fbbf24;max-height:180px;overflow:hidden}}
+.news-panel[hidden]{{display:none}}
+.news-copy{{min-width:0;flex:1;overflow:hidden}}
+.news-topline{{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px}}
+.news-category{{display:inline-block;background:#fbbf24;color:#422006;padding:4px 8px;border-radius:5px;font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.3px}}
+.news-title{{font-size:clamp(16px,1.25vw,24px);font-weight:900;color:#fff;overflow-wrap:anywhere}}
+#newsMeta{{font-size:12px;color:#fde68a;margin:3px 0}}
+#newsBody{{margin:5px 0 0;color:#fff7ed;font-size:clamp(13px,1vw,18px);white-space:pre-wrap;overflow-wrap:anywhere;max-height:72px;overflow:hidden}}
+.news-attachment{{display:inline-block;margin-top:6px;color:#fde68a;font-weight:800;font-size:13px}}
+#newsImage{{max-height:90px;max-width:130px;object-fit:contain;border-radius:8px;background:#fff;padding:3px}}
+.news-stamp{{flex:0 0 auto;text-align:center;color:#fde68a;font-size:12px;font-weight:900;letter-spacing:1px}}
+.news-stamp strong{{display:block;font-size:25px;color:#fff;margin-bottom:4px}}
 #board{{position:relative;flex:1;overflow-y:auto;overscroll-behavior:contain;padding:20px 22px 34px;scrollbar-color:#38bdf8 #0f172a;scrollbar-width:thin}}
 .day-heading{{font-size:clamp(18px,1.5vw,28px);font-weight:900;color:#7dd3fc;border-bottom:1px solid #33506f;padding:0 0 8px;margin:12px 0 14px}}
 .hour-heading{{color:#fde68a;font-weight:900;font-size:clamp(15px,1.15vw,22px);margin:18px 0 8px}}
@@ -219,15 +324,25 @@ button{{background:#0ea5e9;color:#001a2a;border:none;border-radius:8px;padding:1
 .grid-table{{width:100%;border-collapse:separate;border-spacing:5px;table-layout:fixed}} .grid-table th{{background:#1e40af;color:white;padding:12px 6px;border-radius:7px;font-size:clamp(14px,1.15vw,20px)}} .grid-table td{{vertical-align:top;background:#0e1d30;border:1px solid #2f4968;border-radius:8px;padding:7px;overflow-wrap:anywhere}}
 .grid-item{{background:#142944;border-left:4px solid #38bdf8;padding:8px;margin:5px 0;border-radius:5px;font-size:clamp(12px,.95vw,17px)}} .grid-item strong{{display:block;color:white;margin-bottom:4px}} .grid-item small{{color:#bfdbfe}}
 .empty{{text-align:center;color:#cbd5e1;padding:60px 20px;font-size:clamp(20px,2vw,32px)}} .foot{{padding:7px 20px;background:#06101d;color:#8fa8c4;font-size:12px;display:flex;justify-content:space-between;gap:12px}}
-@media(max-width:800px){{.top{{align-items:flex-start;flex-direction:column}} .clock{{text-align:left}} .filters label{{width:100%}} .filters select{{max-width:none;width:100%}} .status{{margin-left:0}} .grid-table{{table-layout:auto}} .cards{{grid-template-columns:1fr}}}}
+@media(max-width:800px){{.top{{align-items:flex-start;flex-direction:column}} .clock{{text-align:left}} .filters label{{width:100%}} .filters select{{max-width:none;width:100%}} .status{{margin-left:0}} .grid-table{{table-layout:auto}} .cards{{grid-template-columns:1fr}} .news-panel{{align-items:flex-start;gap:8px;padding:9px 12px}} .news-stamp{{display:none}} #newsBody{{max-height:60px}}}}
 </style></head>
 <body>
 <header class="top"><div class="brand"><h1>{htmlmod.escape(title)}</h1><p>{htmlmod.escape(subtitle)}</p></div><div class="clock"><span id="clock">--:--:--</span><small id="date"></small></div></header>
 {filter_markup}
 <div class="tools">{controls}<span class="status" id="status">Chargement des emplois du temps…</span></div>
+<section class="news-panel" id="newsPanel" hidden aria-live="polite">
+  <div class="news-copy">
+    <div class="news-topline"><span class="news-category" id="newsCategory">AVIS</span><strong class="news-title" id="newsTitle"></strong></div>
+    <div id="newsMeta"></div><p id="newsBody"></p>
+    <a id="newsAttachment" class="news-attachment" hidden target="_blank" rel="noopener noreferrer"></a>
+  </div>
+  <img id="newsImage" alt="Illustration de l'annonce" hidden>
+  <div class="news-stamp"><strong>INFO</strong>ACTUALITÉS<br>ET AVIS</div>
+</section>
 <main id="board" aria-live="polite"></main><footer class="foot"><span>Université Djillali Liabès · Faculté de Génie Électrique</span><span>Affichage TV — actualisé dans cette page</span></footer>
 <script>
 const DATA={data_js};
+const NEWS={news_js};
 const DAYS={json.dumps(JOURS_ORDRE, ensure_ascii=False)};
 const INITIAL_SPEED={int(speed)};
 const PRESELECTED_TEACHERS={json.dumps(selected_teachers or [], ensure_ascii=False)};
@@ -254,6 +369,8 @@ function getFilteredRows(){{let day=document.getElementById('f-day')?.value||'',
 function updateRender(){{let rows=getFilteredRows();if(activeLayout==='grid')renderGrid(rows);else if(activeLayout==='teacher')renderTeachers(rows);else renderList(rows);statusEl.textContent=rows.length.toLocaleString('fr-FR')+' séance(s) affichée(s)';board.scrollTop=0;}}
 function syncTeacherPicker(){{let names=getSelectedTeachers(),button=document.getElementById('teacherToggle'),count=document.getElementById('teacherCount');if(button)button.textContent=names.length?`${{names.length}} enseignant(s) sélectionné(s)`:'Tous les enseignants';if(count)count.textContent=names.length?`${{names.length}} sélectionné(s)`:'Tous les enseignants';}}
 function initTeacherPicker(){{let host=document.getElementById('teacherCheckboxes');if(!host)return;let names=[...new Set(DATA.flatMap(r=>teacherNames(r.Enseignants)).filter(Boolean))].sort(natural);names.forEach((name,i)=>{{let label=document.createElement('label');label.className='teacher-option';label.dataset.search=teacherKey(name);let box=document.createElement('input');box.type='checkbox';box.value=name;box.id='teacher-option-'+i;box.addEventListener('change',()=>{{syncTeacherPicker();updateRender();}});let txt=document.createElement('span');txt.textContent=name;label.append(box,txt);host.appendChild(label);}});let toggle=document.getElementById('teacherToggle'),options=document.getElementById('teacherOptions'),search=document.getElementById('teacherSearch');toggle?.addEventListener('click',()=>{{let open=options.hidden;options.hidden=!open;toggle.setAttribute('aria-expanded',String(open));if(open)search?.focus();}});search?.addEventListener('input',()=>{{let q=teacherKey(search.value);host.querySelectorAll('.teacher-option').forEach(el=>{{el.style.display=el.dataset.search.includes(q)?'flex':'none';}});}});document.getElementById('teacherClear')?.addEventListener('click',()=>{{host.querySelectorAll('input[type="checkbox"]').forEach(b=>b.checked=false);syncTeacherPicker();updateRender();}});document.addEventListener('click',ev=>{{let picker=document.getElementById('teacherPicker');if(picker&&!picker.contains(ev.target)){{options.hidden=true;toggle?.setAttribute('aria-expanded','false');}}}});syncTeacherPicker();}}
+function renderNews(index){{let panel=document.getElementById('newsPanel');if(!panel)return;if(!NEWS.length){{panel.hidden=true;return;}}let item=NEWS[index%NEWS.length];panel.hidden=false;document.getElementById('newsCategory').textContent=item.category||'Avis';document.getElementById('newsTitle').textContent=item.title||'Information';document.getElementById('newsMeta').textContent=[item.audience||'Étudiants et enseignants',item.created_at?'Publié le '+item.created_at:''].filter(Boolean).join(' · ');document.getElementById('newsBody').textContent=item.body||'';let link=document.getElementById('newsAttachment'),img=document.getElementById('newsImage');link.hidden=true;link.removeAttribute('href');img.hidden=true;img.removeAttribute('src');if(item.attachment_data&&item.attachment_name){{link.href=item.attachment_data;link.download=item.attachment_name;link.textContent='📎 Ouvrir / télécharger : '+item.attachment_name;link.hidden=false;if(String(item.attachment_mime||'').startsWith('image/')){{img.src=item.attachment_data;img.alt=item.attachment_name;img.hidden=false;}}}}}}
+let newsIndex=0;renderNews(newsIndex);if(NEWS.length>1)setInterval(()=>{{newsIndex=(newsIndex+1)%NEWS.length;renderNews(newsIndex);}},14000);
 if(document.getElementById('f-day')){{fillSelect('f-day','Tous les jours',uniqueSorted('Jours'));fillSelect('f-time','Tous les créneaux',['Matin','Après-midi',...uniqueSorted('Horaire',true)]);fillSelect('f-promo','Toutes les promotions',uniqueSorted('Promotion'));fillSelect('f-dept','Tous les départements',uniqueSorted('Département'));fillSelect('f-kind','Tous les enseignements',['Cours','TD','TP','Cours + TD','TD + TP','Cours + TP']);initTeacherPicker();document.getElementById('apply').addEventListener('click',updateRender);['f-day','f-time','f-promo','f-dept','f-kind'].forEach(id=>document.getElementById(id).addEventListener('change',updateRender));}}
 let speedEl=document.getElementById('speed');if(speedEl){{speedEl.value=INITIAL_SPEED;speedEl.addEventListener('input',()=>{{speed=Number(speedEl.value);}});}}
 let viewEl=document.getElementById('view');if(viewEl){{viewEl.value=activeLayout;viewEl.addEventListener('change',()=>{{activeLayout=viewEl.value;updateRender();}});}}
@@ -310,6 +427,151 @@ m2.metric("Promotions",len(promotions))
 m3.metric("Départements",len(departements))
 m4.metric("Jours détectés",len(jours))
 st.caption(f"Fichier source : {source_name} · Le classeur original n'est jamais modifié.")
+
+# -------------------- ACTUALITÉS, ANNONCES ET AVIS --------------------
+st.divider()
+st.subheader("📰 Actualités, annonces et avis")
+st.write("Rédigez un message directement ou joignez un document / une image. Les publications actives apparaîtront dans l’aperçu TV et dans le fichier HTML autonome téléchargé.")
+publications = _charger_publications()
+publications_actives = [pub for pub in publications if _publication_en_cours(pub)]
+admin_password = _mot_de_passe_admin_publications()
+
+if not admin_password:
+    st.warning("La gestion des publications est verrouillée tant qu’un mot de passe administrateur n’a pas été configuré.")
+    with st.expander("🔐 Configurer l’accès administrateur", expanded=True):
+        st.markdown("Créez le fichier `.streamlit/secrets.toml` dans le dossier de l’application et ajoutez la ligne suivante avec votre propre mot de passe :")
+        st.code('PUBLICATION_ADMIN_PASSWORD = "Remplacez-par-un-mot-de-passe-long-et-personnel"', language="toml")
+        st.caption("Sur Streamlit Community Cloud, ajoutez cette valeur dans Settings → Secrets avant de partager le lien de l’application.")
+elif not st.session_state.get("publication_admin_authentifie", False):
+    with st.form("connexion_administration_publications"):
+        mot_de_passe_saisi = st.text_input("Mot de passe administrateur pour publier", type="password")
+        tentative_connexion = st.form_submit_button("🔓 Accéder à la gestion des publications", type="primary", use_container_width=True)
+    if tentative_connexion:
+        if hmac.compare_digest(mot_de_passe_saisi, admin_password):
+            st.session_state["publication_admin_authentifie"] = True
+            st.rerun()
+        else:
+            st.error("Mot de passe incorrect.")
+else:
+    top_admin1, top_admin2 = st.columns([4, 1])
+    with top_admin1:
+        st.success("Session administrateur : vous pouvez rédiger, téléverser et gérer les publications.")
+    with top_admin2:
+        if st.button("Déconnexion", key="deconnexion_admin_publications", use_container_width=True):
+            st.session_state["publication_admin_authentifie"] = False
+            st.rerun()
+    with st.expander("✍️ Rédiger ou téléverser une nouvelle publication", expanded=False):
+        limiter_date = st.checkbox("Définir une date de fin d’affichage", value=False, key="limiter_date_publication_edt")
+        if limiter_date:
+            date_fin_publication = st.date_input("Afficher jusqu’au", value=date.today() + timedelta(days=30), min_value=date.today(), key="date_fin_publication_edt")
+        else:
+            date_fin_publication = None
+        with st.form("form_publication_edt", clear_on_submit=True):
+            nc1, nc2 = st.columns(2)
+            with nc1:
+                nouvelle_categorie = st.selectbox("Rubrique", CATEGORIES_PUBLICATION, key="nouvelle_categorie_edt")
+            with nc2:
+                nouveau_public = st.selectbox("Public concerné", PUBLICS_PUBLICATION, index=2, key="nouveau_public_edt")
+            nouveau_titre = st.text_input("Titre de la publication *", placeholder="Ex. Avis aux étudiants de L2…", max_chars=180)
+            nouveau_message = st.text_area("Texte à publier", placeholder="Écrivez ici le message complet, les dates, les lieux et les consignes…", height=140, max_chars=10000)
+            fichier_publication = st.file_uploader("Pièce jointe facultative (image, PDF, Word, Excel ou PowerPoint — 4 Mo maximum)", type=EXTENSIONS_PUBLICATION, accept_multiple_files=False, key="fichier_publication_edt")
+            publier = st.form_submit_button("📢 Publier l’annonce / l’avis", type="primary", use_container_width=True)
+        if publier:
+            if not nouveau_titre.strip():
+                st.error("Veuillez renseigner le titre de la publication.")
+            elif not nouveau_message.strip() and fichier_publication is None:
+                st.error("Écrivez un message ou ajoutez une pièce jointe avant de publier.")
+            elif fichier_publication is not None and len(fichier_publication.getvalue()) > TAILLE_MAX_PIECE_JOINTE:
+                st.error("La pièce jointe dépasse 4 Mo. Veuillez choisir un fichier plus petit.")
+            else:
+                maintenant = datetime.now()
+                publication = {
+                    "id": uuid.uuid4().hex,
+                    "category": nouvelle_categorie,
+                    "audience": nouveau_public,
+                    "title": nouveau_titre.strip(),
+                    "body": nouveau_message.strip(),
+                    "created_at": maintenant.strftime("%d/%m/%Y à %H:%M"),
+                    "created_sort": maintenant.isoformat(timespec="minutes"),
+                    "expires_on": date_fin_publication.isoformat() if date_fin_publication else "",
+                    "attachment_name": "",
+                    "attachment_path": "",
+                    "attachment_mime": "",
+                    "active": True,
+                }
+                if fichier_publication is not None:
+                    DOSSIER_MEDIAS_PUBLICATIONS.mkdir(parents=True, exist_ok=True)
+                    nom_original = fichier_publication.name.replace("\\", "/").split("/")[-1]
+                    extension = Path(nom_original).suffix.lower()
+                    chemin_media = DOSSIER_MEDIAS_PUBLICATIONS / f"{publication['id']}{extension}"
+                    chemin_media.write_bytes(fichier_publication.getvalue())
+                    publication["attachment_name"] = nom_original
+                    publication["attachment_path"] = str(chemin_media.relative_to(APP_DIR))
+                    publication["attachment_mime"] = fichier_publication.type or mimetypes.guess_type(nom_original)[0] or "application/octet-stream"
+                publications.append(publication)
+                _sauvegarder_publications(publications)
+                st.session_state["publication_edt_enregistree"] = True
+                st.rerun()
+
+    if st.session_state.pop("publication_edt_enregistree", False):
+        st.success("Publication enregistrée. Elle sera affichée dans l’aperçu TV et dans le HTML autonome.")
+
+    publications = _charger_publications()
+    publications_actives = [pub for pub in publications if _publication_en_cours(pub)]
+    st.subheader(f"📋 Publications en cours ({len(publications_actives)}) et gestion des archives")
+    filtre_publications = st.radio("Afficher", ["En cours", "Toutes", "Archivées"], horizontal=True, key="filtre_gestion_publications_edt")
+    if filtre_publications == "En cours":
+        pubs_a_afficher = [pub for pub in publications if _publication_en_cours(pub)]
+    elif filtre_publications == "Archivées":
+        pubs_a_afficher = [pub for pub in publications if not pub.get("active", True)]
+    else:
+        pubs_a_afficher = publications[:]
+    pubs_a_afficher.sort(key=lambda pub: str(pub.get("created_sort", pub.get("created_at", ""))), reverse=True)
+    if not pubs_a_afficher:
+        st.info("Aucune publication dans cette catégorie. Utilisez le formulaire ci-dessus pour rédiger une annonce ou téléverser un document.")
+    for pub in pubs_a_afficher:
+        statut_pub = "En cours" if _publication_en_cours(pub) else ("Archivée" if not pub.get("active", True) else "Expirée")
+        titre_expander = f"{'🟢' if statut_pub == 'En cours' else '⚪'} {pub.get('category', 'Avis')} — {pub.get('title', 'Sans titre')} ({statut_pub})"
+        with st.expander(titre_expander, expanded=False):
+            st.caption(f"Public : {pub.get('audience', 'Étudiants et enseignants')} · Publié le : {pub.get('created_at', 'Date non renseignée')}" + (f" · Fin : {pub.get('expires_on')}" if pub.get('expires_on') else ""))
+            if pub.get("body"):
+                st.markdown(pub["body"])
+            chemin_piece = _chemin_piece_jointe(pub)
+            if chemin_piece:
+                if str(pub.get("attachment_mime", "")).startswith("image/"):
+                    st.image(str(chemin_piece), caption=pub.get("attachment_name", "Pièce jointe"), use_container_width=True)
+                st.download_button("📎 Télécharger la pièce jointe : " + pub.get("attachment_name", "fichier"), data=chemin_piece.read_bytes(), file_name=pub.get("attachment_name") or chemin_piece.name, mime=pub.get("attachment_mime") or "application/octet-stream", key=f"telecharger_publication_{pub.get('id')}")
+            ac1, ac2 = st.columns(2)
+            with ac1:
+                if pub.get("active", True):
+                    if st.button("📦 Archiver", key=f"archiver_publication_{pub.get('id')}", use_container_width=True):
+                        for element in publications:
+                            if element.get("id") == pub.get("id"):
+                                element["active"] = False
+                                break
+                        _sauvegarder_publications(publications)
+                        st.rerun()
+                else:
+                    if st.button("♻️ Republier", key=f"republier_publication_{pub.get('id')}", use_container_width=True):
+                        for element in publications:
+                            if element.get("id") == pub.get("id"):
+                                element["active"] = True
+                                break
+                        _sauvegarder_publications(publications)
+                        st.rerun()
+            with ac2:
+                confirmer_suppression = st.checkbox("Confirmer la suppression définitive", key=f"confirmer_suppression_publication_{pub.get('id')}")
+                if confirmer_suppression and st.button("🗑️ Supprimer", key=f"supprimer_publication_{pub.get('id')}", type="secondary", use_container_width=True):
+                    publications = [element for element in publications if element.get("id") != pub.get("id")]
+                    if chemin_piece and chemin_piece.exists():
+                        try:
+                            chemin_piece.unlink()
+                        except OSError:
+                            pass
+                    _sauvegarder_publications(publications)
+                    st.rerun()
+
+st.divider()
 st.subheader("🎛️ Choisir l’EDT à afficher")
 c1,c2,c3,c4=st.columns([1,1.45,1.35,1])
 with c1: jour_sel=st.selectbox("Jour",[TOUS_JOURS]+jours,index=0)
@@ -361,13 +623,13 @@ if st.session_state.get("edt_tv_preview",False):
     elif not filtered_records: st.warning("Aucune séance ne correspond aux filtres actuels.")
     else:
         st.subheader("📺 Aperçu de l’affichage TV")
-        tv_html=_page_html(filtered_records,"Emploi du temps — Faculté de génie électrique - UDL-SBA",filtres_txt,filters=False,speed=vitesse,autoplay=True,layout=affichage,selected_teachers=enseignants_sel)
+        tv_html=_page_html(filtered_records,"Emploi du temps — Faculté de génie électrique - UDL-SBA",filtres_txt,filters=False,speed=vitesse,autoplay=True,layout=affichage,selected_teachers=enseignants_sel,publications=publications_actives)
         components.html(tv_html,height=760,scrolling=False)
         st.caption("Ouvrez cette application dans le navigateur de la TV puis passez en plein écran (F11). L’aperçu défile automatiquement.")
 st.divider()
 st.subheader("💾 Télécharger l’affichage pour TV")
-st.write("Le fichier HTML autonome contient toutes les lignes du fichier Excel chargé. Copiez-le sur une clé USB et ouvrez-le dans le navigateur de la TV ou d’un ordinateur relié à la TV. Il fonctionne hors ligne.")
-usb_html=_page_html(records_all,"Emploi du temps — Faculté de génie électrique - UDL-SBA","Sélectionnez le jour, l’horaire, la promotion, le département, l’enseignant et le type d’enseignement sur cet écran TV.",filters=True,speed=vitesse,autoplay=True,layout="Liste défilante")
+st.write("Le fichier HTML autonome contient toutes les lignes du fichier Excel chargé et les publications actives au moment du téléchargement. Les annonces défilent dans un bandeau d'information. Les pièces jointes de petite taille sont intégrées pour une consultation hors ligne.")
+usb_html=_page_html(records_all,"Emploi du temps — Faculté de génie électrique - UDL-SBA","Sélectionnez le jour, l’horaire, la promotion, le département, l’enseignant et le type d’enseignement sur cet écran TV.",filters=True,speed=vitesse,autoplay=True,layout="Liste défilante",publications=publications_actives)
 st.download_button("📥 Télécharger le fichier HTML autonome pour clé USB",data=usb_html.encode("utf-8"),file_name="EDT_TV_USB.html",mime="text/html",type="primary")
 st.download_button("📥 Télécharger les données Excel chargées",data=data_bytes,file_name=Path(source_name or "EDT.xlsx").name,mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 with st.expander("ℹ️ Mise en ligne pour obtenir un lien web permanent"):
@@ -378,4 +640,6 @@ with st.expander("ℹ️ Mise en ligne pour obtenir un lien web permanent"):
 4. Ouvrez le lien fourni par Streamlit sur la TV, choisissez les filtres et cliquez sur **Afficher / actualiser la TV**, puis utilisez le plein écran.
 
 **Mode USB :** téléchargez `EDT_TV_USB.html`, copiez-le sur une clé USB et ouvrez-le avec le navigateur de la TV. Certains téléviseurs n’ouvrent pas les fichiers HTML locaux ; dans ce cas, utilisez un ordinateur ou mini-PC connecté en HDMI.
+
+**Publications :** sur un ordinateur/serveur local, elles sont enregistrées dans `publications_edt.json` et les pièces jointes dans `publications_medias/`, à côté du script. Pour une publication durable sur un hébergement cloud après redéploiement, utiliser un stockage persistant (par exemple Supabase ou un disque persistant).
 """)
