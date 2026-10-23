@@ -17,9 +17,9 @@ COLONNES = ["Enseignements", "Code", "Enseignants", "Horaire", "Jours", "Lieu", 
 JOURS_ORDRE = ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"]
 TOUS_JOURS, TOUS_CRENEAUX = "Tous les jours", "Tous les créneaux"
 TOUTES_PROMOTIONS, TOUS_DEPARTEMENTS = "Toutes les promotions", "Tous les départements"
-TYPES_ENSEIGNEMENT = ["Cours", "TD", "TP"]
+TYPES_ENSEIGNEMENT = ["Cours", "TD", "TP", "Atelier"]
 CHOIX_TYPES_ENSEIGNEMENT = [
-    "Tous les enseignements", "Cours", "TD", "TP",
+    "Tous les enseignements", "Cours", "TD", "TP", "Atelier",
     "Cours + TD", "TD + TP", "Cours + TP", "Sélection personnalisée",
 ]
 
@@ -97,15 +97,29 @@ def _jour_index(value: Any) -> int:
     return 100
 
 def _type_enseignement(ligne: Any) -> str:
-    """Classe une ligne en Cours, TD ou TP à partir du code et de l'intitulé."""
+    """Détermine le type depuis les préfixes réellement présents dans Code et Enseignements."""
     code = _sans_accents(ligne.get("Code", ""))
     intitule = _sans_accents(ligne.get("Enseignements", ""))
+    # Dans le classeur source, les valeurs commencent par TP, TD, Cours ou Atelier.
+    # On privilégie le champ Code, puis le préfixe de l'intitulé, pour éviter les faux Cours.
+    prefixes = [
+        (r"^tp(?:\d+)?(?=$|[\s\-–—_/])", "TP"),
+        (r"^td(?:\d+)?(?=$|[\s\-–—_/])", "TD"),
+        (r"^cours(?=$|[\s\-–—_/])", "Cours"),
+        (r"^atelier(?=$|[\s\-–—_/])", "Atelier"),
+    ]
+    for valeur in (code, intitule):
+        for motif, type_nom in prefixes:
+            if re.search(motif, valeur, flags=re.I):
+                return type_nom
+    # Compatibilité avec d'autres classeurs où le type est indiqué dans le texte.
     texte = f"{code} {intitule}"
-    if re.search(r"(?<![a-z0-9])tp\d*(?![a-z0-9])", code) or re.search(r"(?<![a-z0-9])tp\d*(?![a-z0-9])", intitule) or re.search(r"travaux pratiques?", texte):
+    if re.search(r"(?<![a-z0-9])tp\d*(?![a-z0-9])", texte) or re.search(r"travaux pratiques?", texte):
         return "TP"
-    if re.search(r"(?<![a-z0-9])td\d*(?![a-z0-9])", code) or re.search(r"(?<![a-z0-9])td\d*(?![a-z0-9])", intitule) or re.search(r"travaux diriges?", texte):
+    if re.search(r"(?<![a-z0-9])td\d*(?![a-z0-9])", texte) or re.search(r"travaux diriges?", texte):
         return "TD"
-    # Les séances qui ne portent pas explicitement le type TD ou TP sont classées en cours.
+    if re.search(r"(?<![a-z0-9])atelier(?![a-z0-9])", texte):
+        return "Atelier"
     return "Cours"
 
 def _types_a_afficher(choix: str, personnalises: list[str] | None = None) -> list[str]:
@@ -161,7 +175,17 @@ def _charger_excel(data: bytes) -> pd.DataFrame:
     return _nettoyer_dataframe(pd.read_excel(io.BytesIO(data), dtype=str))
 
 def _records(df: pd.DataFrame) -> list[dict]:
-    return [{k:(str(v).strip() if v is not None else "") for k,v in row.items()} for row in df[COLONNES].fillna("").to_dict(orient="records")]
+    """Sérialise les lignes avec le type calculé côté Python pour assurer des couleurs fiables en HTML."""
+    rows = df[COLONNES].fillna("").to_dict(orient="records")
+    types = df["_type_enseignement"].tolist() if "_type_enseignement" in df.columns else [
+        _type_enseignement(row) for row in rows
+    ]
+    result = []
+    for row, type_nom in zip(rows, types):
+        item = {k: (str(v).strip() if v is not None else "") for k, v in row.items()}
+        item["TypeEnseignement"] = str(type_nom or "Cours").strip()
+        result.append(item)
+    return result
 
 def _json_safe(records: list[dict]) -> str:
     return json.dumps(records, ensure_ascii=False, separators=(",",":")).replace("</","<\\/")
@@ -278,7 +302,7 @@ def _page_html(records: list[dict], title: str, subtitle: str, *, filters: bool,
       <button id="fullscreenBtn" type="button">⛶ Plein écran</button>
       <label class="speed-label">Vitesse <input id="speed" type="range" min="5" max="80" step="5" value="24"></label>
       <label class="view-label">Vue <select id="view"><option value="list">Liste défilante</option><option value="grid">Grille</option><option value="teacher">Par enseignant</option></select></label>
-      <div class="type-legend" aria-label="Légende des couleurs"><span class="legend-item cours"><i class="legend-dot"></i>Cours</span><span class="legend-item td"><i class="legend-dot"></i>TD</span><span class="legend-item tp"><i class="legend-dot"></i>TP</span></div>"""
+      <div class="type-legend" aria-label="Légende des couleurs"><span class="legend-item cours"><i class="legend-dot"></i>Cours</span><span class="legend-item td"><i class="legend-dot"></i>TD</span><span class="legend-item tp"><i class="legend-dot"></i>TP</span><span class="legend-item atelier"><i class="legend-dot"></i>Atelier</span></div>"""
     return fr"""<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="application-name" content="EDT TV UDL-SBA"><title>{htmlmod.escape(title)}</title>
 <style>
@@ -303,7 +327,7 @@ button{{background:#0ea5e9;color:#001a2a;border:none;border-radius:8px;padding:1
 .type-legend{{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:3px 5px;color:#e2e8f0;font-size:12px;font-weight:800}}
 .legend-item{{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}}
 .legend-dot{{width:11px;height:11px;border-radius:50%;display:inline-block}}
-.legend-item.cours .legend-dot{{background:#60a5fa}} .legend-item.td .legend-dot{{background:#4ade80}} .legend-item.tp .legend-dot{{background:#f87171}}
+.legend-item.cours .legend-dot{{background:#60a5fa}} .legend-item.td .legend-dot{{background:#4ade80}} .legend-item.tp .legend-dot{{background:#f87171}} .legend-item.atelier .legend-dot{{background:#c084fc}}
 .status{{margin-left:auto;color:#cbd5e1;font-weight:700;font-size:14px}}
 .news-panel{{display:flex;align-items:center;gap:18px;flex:0 0 auto;padding:10px 22px;background:linear-gradient(110deg,#422006,#78350f 48%,#1e293b);border-bottom:2px solid #fbbf24;max-height:180px;overflow:hidden}}
 .news-panel[hidden]{{display:none}}
@@ -326,13 +350,14 @@ button{{background:#0ea5e9;color:#001a2a;border:none;border-radius:8px;padding:1
 .card.cours{{border-color:#60a5fa;border-left-color:#93c5fd;background:linear-gradient(120deg,#123d80,#1e40af)}}
 .card.td{{border-color:#4ade80;border-left-color:#86efac;background:linear-gradient(120deg,#14532d,#166534)}}
 .card.tp{{border-color:#f87171;border-left-color:#fca5a5;background:linear-gradient(120deg,#7f1d1d,#b91c1c)}}
+.card.atelier{{border-color:#c084fc;border-left-color:#d8b4fe;background:linear-gradient(120deg,#581c87,#7e22ce)}}
 .subject{{font-size:clamp(18px,1.55vw,28px);line-height:1.22;font-weight:900;color:#fff;margin-bottom:10px}}
 .badges{{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:9px}} .badge{{border-radius:6px;padding:4px 8px;font-size:12px;font-weight:900;background:#1d4ed8;color:white}}
-.badge.tp{{background:#fecaca;color:#7f1d1d}} .badge.td{{background:#bbf7d0;color:#14532d}} .badge.cours{{background:#bfdbfe;color:#1e3a8a}}
+.badge.tp{{background:#fecaca;color:#7f1d1d}} .badge.td{{background:#bbf7d0;color:#14532d}} .badge.cours{{background:#bfdbfe;color:#1e3a8a}} .badge.atelier{{background:#f3e8ff;color:#581c87}}
 .details{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:7px;color:#dbeafe;font-size:clamp(13px,1.05vw,18px)}} .details b{{color:#7dd3fc}}
 .grid-table{{width:100%;border-collapse:separate;border-spacing:5px;table-layout:fixed}} .grid-table th{{background:#1e40af;color:white;padding:12px 6px;border-radius:7px;font-size:clamp(14px,1.15vw,20px)}} .grid-table td{{vertical-align:top;background:#0e1d30;border:1px solid #2f4968;border-radius:8px;padding:7px;overflow-wrap:anywhere}}
 .grid-item{{background:#142944;border-left:4px solid #38bdf8;padding:8px;margin:5px 0;border-radius:5px;font-size:clamp(12px,.95vw,17px)}}
-.grid-item.cours{{background:#1e3a8a;border-left-color:#60a5fa}} .grid-item.td{{background:#14532d;border-left-color:#4ade80}} .grid-item.tp{{background:#7f1d1d;border-left-color:#f87171}}
+.grid-item.cours{{background:#1e3a8a;border-left-color:#60a5fa}} .grid-item.td{{background:#14532d;border-left-color:#4ade80}} .grid-item.tp{{background:#7f1d1d;border-left-color:#f87171}} .grid-item.atelier{{background:#581c87;border-left-color:#c084fc}}
 .grid-item strong{{display:block;color:white;margin-bottom:4px}} .grid-item small{{color:#f1f5f9}}
 .empty{{text-align:center;color:#cbd5e1;padding:60px 20px;font-size:clamp(20px,2vw,32px)}} .foot{{padding:7px 20px;background:#06101d;color:#8fa8c4;font-size:12px;display:flex;justify-content:space-between;gap:12px}}
 @media(max-width:800px){{.top{{align-items:flex-start;flex-direction:column}} .clock{{text-align:left}} .filters label{{width:100%}} .filters select{{max-width:none;width:100%}} .status{{margin-left:0}} .grid-table{{table-layout:auto}} .cards{{grid-template-columns:1fr}} .news-panel{{align-items:flex-start;gap:8px;padding:9px 12px}} .news-stamp{{display:none}} #newsBody{{max-height:60px}}}}
@@ -362,27 +387,27 @@ let activeLayout={json.dumps(initial_layout)};
 const board=document.getElementById('board'), statusEl=document.getElementById('status');
 function esc(s){{return String(s??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));}}
 function dayIndex(s){{let n=String(s||'').toLowerCase();return DAYS.findIndex(d=>d.toLowerCase()===n);}}
-function timeStart(s){{let m=String(s||'').match(/(\\d{{1,2}})\\s*h\\s*(\\d{{0,2}})/i);return m?Number(m[1])*60+Number(m[2]||0):99999;}}
+function timeStart(s){{let m=String(s||'').match(/(\d{{1,2}})\s*h\s*(\d{{0,2}})/i);return m?Number(m[1])*60+Number(m[2]||0):99999;}}
 function timeMatches(value,selected){{let t=timeStart(value);if(selected==='Matin')return t>=480&&t<750;if(selected==='Après-midi')return t>=750&&t<1020;return value===selected;}}
 function teacherNames(value){{return String(value||'').split(/[\/+]/).map(n=>n.replace(/\s+/g,' ').trim().replace(/^[ .;,]+|[ .;,]+$/g,'')).filter(Boolean);}}
 function teacherKey(value){{return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toLocaleLowerCase('fr');}}
 function natural(a,b){{return String(a).localeCompare(String(b),'fr',{{numeric:true,sensitivity:'base'}});}}
 function uniqueSorted(key, order){{let vals=[...new Set(DATA.map(r=>String(r[key]||'').trim()).filter(Boolean))];if(order)vals.sort((a,b)=>timeStart(a)-timeStart(b)||natural(a,b));else if(key==='Jours')vals.sort((a,b)=>(dayIndex(a)+100)-(dayIndex(b)+100)||natural(a,b));else vals.sort(natural);return vals;}}
 function fillSelect(id, first, vals){{let el=document.getElementById(id);if(!el)return;el.innerHTML='';let opt=document.createElement('option');opt.value='';opt.textContent=first;el.appendChild(opt);vals.forEach(v=>{{let o=document.createElement('option');o.value=v;o.textContent=v;el.appendChild(o);}});}}
-function kind(r){{let code=String(r.Code||'').toLowerCase();let text=(code+' '+String(r.Enseignements||'')).normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');if(/(?:^|[^a-z0-9])tp\\d*(?:[^a-z0-9]|$)/.test(code)||/(?:^|[^a-z0-9])tp\\d*(?:[^a-z0-9]|$)/.test(text)||/travaux pratiques?/.test(text))return 'TP';if(/(?:^|[^a-z0-9])td\\d*(?:[^a-z0-9]|$)/.test(code)||/(?:^|[^a-z0-9])td\\d*(?:[^a-z0-9]|$)/.test(text)||/travaux diriges?/.test(text))return 'TD';return 'Cours';}}
+function kind(r){{const fourni=String(r.TypeEnseignement||'').trim().toLowerCase();if(fourni==='tp')return 'TP';if(fourni==='td')return 'TD';if(fourni==='atelier')return 'Atelier';if(fourni==='cours')return 'Cours';let code=String(r.Code||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();let titre=String(r.Enseignements||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();const valeurs=[code,titre];for(const v of valeurs){{if(/^tp(?:\d+)?(?=$|[\s\-_/])/.test(v))return 'TP';if(/^td(?:\d+)?(?=$|[\s\-_/])/.test(v))return 'TD';if(/^atelier(?=$|[\s\-_/])/.test(v))return 'Atelier';if(/^cours(?=$|[\s\-_/])/.test(v))return 'Cours';}}if(/travaux pratiques?/.test(code+' '+titre))return 'TP';if(/travaux diriges?/.test(code+' '+titre))return 'TD';return 'Cours';}}
 function card(r){{let k=kind(r).toLowerCase();let typeLabel=k==='cours'?'COURS':k.toUpperCase();return `<article class="card ${{k}}"><div class="subject">${{esc(r.Enseignements||'Enseignement non renseigné')}}</div><div class="badges"><span class="badge ${{k}}">${{typeLabel}}</span><span class="badge">${{esc(r.Code||'Code non renseigné')}}</span><span class="badge">${{esc(r.Horaire||'Horaire non renseigné')}}</span><span class="badge">${{esc(r.Jours||'Jour non renseigné')}}</span></div><div class="details"><span><b>Enseignant(s) :</b> ${{esc(r.Enseignants||'Non renseigné')}}</span><span><b>Lieu :</b> ${{esc(r.Lieu||'Non renseigné')}}</span><span><b>Promotion :</b> ${{esc(r.Promotion||'Non renseignée')}}</span><span><b>Département :</b> ${{esc(r.Département||'Non renseigné')}}</span></div></article>`;}}
 function renderList(rows){{if(!rows.length){{board.innerHTML='<div class="empty">Aucun enseignement ne correspond aux filtres sélectionnés.</div>';return;}}let html='',lastDay='';rows.forEach(r=>{{if(r.Jours!==lastDay){{if(lastDay)html+='</div>';lastDay=r.Jours;html+=`<h2 class="day-heading">${{esc(lastDay)}}</h2><div class="cards">`;}}html+=card(r);}});if(lastDay)html+='</div>';board.innerHTML=html;}}
 function renderGrid(rows){{if(!rows.length){{board.innerHTML='<div class="empty">Aucun enseignement ne correspond aux filtres sélectionnés.</div>';return;}}let days=[...new Set(rows.map(r=>r.Jours))].sort((a,b)=>(dayIndex(a)+100)-(dayIndex(b)+100));let hours=[...new Set(rows.map(r=>r.Horaire))].sort((a,b)=>timeStart(a)-timeStart(b)||natural(a,b));let html='<table class="grid-table"><thead><tr><th>Créneau</th>'+days.map(d=>`<th>${{esc(d)}}</th>`).join('')+'</tr></thead><tbody>';hours.forEach(h=>{{html+=`<tr><th>${{esc(h)}}</th>`;days.forEach(d=>{{let cell=rows.filter(r=>r.Horaire===h&&r.Jours===d);html+='<td>'+cell.map(r=>`<div class="grid-item ${{kind(r).toLowerCase()}}"><strong>${{esc(r.Enseignements)}}</strong><small>${{esc(r.Code)}} · ${{esc(r.Promotion)}}<br>${{esc(r.Enseignants)}}<br>${{esc(r.Lieu)}} · ${{esc(r.Département)}}</small></div>`).join('')+'</td>';}});html+='</tr>';}});html+='</tbody></table>';board.innerHTML=html;}}
 function getSelectedTeachers(){{let boxes=document.querySelectorAll('#teacherCheckboxes input[type="checkbox"]');if(boxes.length)return [...boxes].filter(b=>b.checked).map(b=>b.value);return PRESELECTED_TEACHERS;}}
 function renderTeachers(rows){{let chosen=getSelectedTeachers();if(!chosen.length){{board.innerHTML='<div class="empty">Choisissez un ou plusieurs enseignants dans le filtre « Enseignant(s) ».</div>';return;}}let html='';chosen.forEach(name=>{{let matches=rows.filter(r=>teacherNames(r.Enseignants).some(n=>teacherKey(n)===teacherKey(name)));html+=`<h2 class="day-heading">👤 ${{esc(name)}} <span style="font-size:.7em;color:#bfdbfe">— ${{matches.length}} séance(s)</span></h2>`;if(matches.length){{html+='<div class="cards">'+matches.map(card).join('')+'</div>';}}else{{html+='<div class="empty" style="padding:16px">Aucune séance pour cet enseignant avec les autres filtres.</div>';}}}});board.innerHTML=html;}}
-function kindsForSelection(){{let choice=document.getElementById('f-kind')?.value||'';if(!choice)return ['Cours','TD','TP'];if(choice.includes('+'))return choice.split('+').map(x=>x.trim());return [choice];}}
+function kindsForSelection(){{let choice=document.getElementById('f-kind')?.value||'';if(!choice)return ['Cours','TD','TP','Atelier'];if(choice.includes('+'))return choice.split('+').map(x=>x.trim());return [choice];}}
 function getFilteredRows(){{let day=document.getElementById('f-day')?.value||'',tm=document.getElementById('f-time')?.value||'',pr=document.getElementById('f-promo')?.value||'',de=document.getElementById('f-dept')?.value||'',types=kindsForSelection(),teachers=getSelectedTeachers(),teacherKeys=teachers.map(teacherKey);return DATA.filter(r=>(!day||r.Jours===day)&&(!tm||timeMatches(r.Horaire,tm))&&(!pr||r.Promotion===pr)&&(!de||r.Département===de)&&(!teacherKeys.length||teacherNames(r.Enseignants).some(n=>teacherKeys.includes(teacherKey(n))))&&types.includes(kind(r))).sort((a,b)=>(dayIndex(a.Jours)+100)-(dayIndex(b.Jours)+100)||timeStart(a.Horaire)-timeStart(b.Horaire)||natural(a.Promotion,b.Promotion)||natural(a.Enseignements,b.Enseignements));}}
 function updateRender(){{let rows=getFilteredRows();if(activeLayout==='grid')renderGrid(rows);else if(activeLayout==='teacher')renderTeachers(rows);else renderList(rows);statusEl.textContent=rows.length.toLocaleString('fr-FR')+' séance(s) affichée(s)';board.scrollTop=0;}}
 function syncTeacherPicker(){{let names=getSelectedTeachers(),button=document.getElementById('teacherToggle'),count=document.getElementById('teacherCount');if(button)button.textContent=names.length?`${{names.length}} enseignant(s) sélectionné(s)`:'Tous les enseignants';if(count)count.textContent=names.length?`${{names.length}} sélectionné(s)`:'Tous les enseignants';}}
 function initTeacherPicker(){{let host=document.getElementById('teacherCheckboxes');if(!host)return;let names=[...new Set(DATA.flatMap(r=>teacherNames(r.Enseignants)).filter(Boolean))].sort(natural);names.forEach((name,i)=>{{let label=document.createElement('label');label.className='teacher-option';label.dataset.search=teacherKey(name);let box=document.createElement('input');box.type='checkbox';box.value=name;box.id='teacher-option-'+i;box.addEventListener('change',()=>{{syncTeacherPicker();updateRender();}});let txt=document.createElement('span');txt.textContent=name;label.append(box,txt);host.appendChild(label);}});let toggle=document.getElementById('teacherToggle'),options=document.getElementById('teacherOptions'),search=document.getElementById('teacherSearch');toggle?.addEventListener('click',()=>{{let open=options.hidden;options.hidden=!open;toggle.setAttribute('aria-expanded',String(open));if(open)search?.focus();}});search?.addEventListener('input',()=>{{let q=teacherKey(search.value);host.querySelectorAll('.teacher-option').forEach(el=>{{el.style.display=el.dataset.search.includes(q)?'flex':'none';}});}});document.getElementById('teacherClear')?.addEventListener('click',()=>{{host.querySelectorAll('input[type="checkbox"]').forEach(b=>b.checked=false);syncTeacherPicker();updateRender();}});document.addEventListener('click',ev=>{{let picker=document.getElementById('teacherPicker');if(picker&&!picker.contains(ev.target)){{options.hidden=true;toggle?.setAttribute('aria-expanded','false');}}}});syncTeacherPicker();}}
 function renderNews(index){{let panel=document.getElementById('newsPanel');if(!panel)return;if(!NEWS.length){{panel.hidden=true;return;}}let item=NEWS[index%NEWS.length];panel.hidden=false;document.getElementById('newsCategory').textContent=item.category||'Avis';document.getElementById('newsTitle').textContent=item.title||'Information';document.getElementById('newsMeta').textContent=[item.audience||'Étudiants et enseignants',item.created_at?'Publié le '+item.created_at:''].filter(Boolean).join(' · ');document.getElementById('newsBody').textContent=item.body||'';let link=document.getElementById('newsAttachment'),img=document.getElementById('newsImage');link.hidden=true;link.removeAttribute('href');img.hidden=true;img.removeAttribute('src');if(item.attachment_data&&item.attachment_name){{link.href=item.attachment_data;link.download=item.attachment_name;link.textContent='📎 Ouvrir / télécharger : '+item.attachment_name;link.hidden=false;if(String(item.attachment_mime||'').startsWith('image/')){{img.src=item.attachment_data;img.alt=item.attachment_name;img.hidden=false;}}}}}}
 let newsIndex=0;renderNews(newsIndex);if(NEWS.length>1)setInterval(()=>{{newsIndex=(newsIndex+1)%NEWS.length;renderNews(newsIndex);}},14000);
-if(document.getElementById('f-day')){{fillSelect('f-day','Tous les jours',uniqueSorted('Jours'));fillSelect('f-time','Tous les créneaux',['Matin','Après-midi',...uniqueSorted('Horaire',true)]);fillSelect('f-promo','Toutes les promotions',uniqueSorted('Promotion'));fillSelect('f-dept','Tous les départements',uniqueSorted('Département'));fillSelect('f-kind','Tous les enseignements',['Cours','TD','TP','Cours + TD','TD + TP','Cours + TP']);initTeacherPicker();document.getElementById('apply').addEventListener('click',updateRender);['f-day','f-time','f-promo','f-dept','f-kind'].forEach(id=>document.getElementById(id).addEventListener('change',updateRender));}}
+if(document.getElementById('f-day')){{fillSelect('f-day','Tous les jours',uniqueSorted('Jours'));fillSelect('f-time','Tous les créneaux',['Matin','Après-midi',...uniqueSorted('Horaire',true)]);fillSelect('f-promo','Toutes les promotions',uniqueSorted('Promotion'));fillSelect('f-dept','Tous les départements',uniqueSorted('Département'));fillSelect('f-kind','Tous les enseignements',['Cours','TD','TP','Atelier','Cours + TD','TD + TP','Cours + TP']);initTeacherPicker();document.getElementById('apply').addEventListener('click',updateRender);['f-day','f-time','f-promo','f-dept','f-kind'].forEach(id=>document.getElementById(id).addEventListener('change',updateRender));}}
 let speedEl=document.getElementById('speed');if(speedEl){{speedEl.value=INITIAL_SPEED;speedEl.addEventListener('input',()=>{{speed=Number(speedEl.value);}});}}
 let viewEl=document.getElementById('view');if(viewEl){{viewEl.value=activeLayout;viewEl.addEventListener('change',()=>{{activeLayout=viewEl.value;updateRender();}});}}
 let pauseBtn=document.getElementById('pauseBtn');if(pauseBtn)pauseBtn.addEventListener('click',()=>{{stopped=!stopped;pauseBtn.textContent=stopped?'▶ Reprendre':'⏸ Pause';}});
@@ -399,12 +424,17 @@ data_bytes, source_name = None, None
 if uploaded is not None:
     data_bytes, source_name = uploaded.getvalue(), uploaded.name
 else:
-    default_path = Path(__file__).with_name("EDT_Edition.xlsx")
-    if default_path.exists():
+    chemins_par_defaut = [
+        Path(__file__).with_name("dataEDT-ELT-S1-2027.xlsx"),
+        Path(__file__).with_name("dataEDT-ELT-S1-2027(1).xlsx"),
+        Path(__file__).with_name("EDT_Edition.xlsx"),
+    ]
+    default_path = next((p for p in chemins_par_defaut if p.exists()), None)
+    if default_path is not None:
         data_bytes, source_name = default_path.read_bytes(), default_path.name
-        st.info(f"Fichier d'exemple chargé automatiquement : **{source_name}**. Téléversez un autre fichier Excel pour le remplacer.")
+        st.info(f"Fichier chargé automatiquement : **{source_name}**. Téléversez un autre fichier Excel pour le remplacer.")
     else:
-        st.warning("Téléversez un fichier Excel. Colonnes minimales : Enseignements, Horaire, Jours et Promotion.")
+        st.warning("Téléversez un fichier Excel. Colonnes minimales : Enseignements, Code, Horaire, Jours et Promotion.")
         st.stop()
 try:
     df = _charger_excel(data_bytes)
@@ -437,7 +467,10 @@ m1.metric("Séances chargées",f"{len(df):,}".replace(","," "))
 m2.metric("Promotions",len(promotions))
 m3.metric("Départements",len(departements))
 m4.metric("Jours détectés",len(jours))
-st.caption(f"Fichier source : {source_name} · Le classeur original n'est jamais modifié.")
+comptage_types = df["_type_enseignement"].value_counts().to_dict()
+ordre_types = ["Cours", "TD", "TP", "Atelier"]
+types_resume = " · ".join(f"{nom} : {int(comptage_types.get(nom, 0))}" for nom in ordre_types if comptage_types.get(nom, 0))
+st.caption(f"Fichier source : {source_name} · Types détectés : {types_resume} · Le classeur original n'est jamais modifié.")
 
 # -------------------- ACTUALITÉS, ANNONCES ET AVIS --------------------
 st.divider()
@@ -590,7 +623,7 @@ with c2: creneaux_sel=st.multiselect("Créneau(x) horaire(s)",[TOUS_CRENEAUX]+CH
 with c3: promo_sel=st.selectbox("Promotion",[TOUTES_PROMOTIONS]+promotions,index=0)
 with c4: dept_sel=st.selectbox("Département",[TOUS_DEPARTEMENTS]+departements,index=0)
 c5,c6,c7,c8=st.columns([1.45,1.15,1,1.35])
-with c5: type_sel=st.selectbox("Type d’enseignement",CHOIX_TYPES_ENSEIGNEMENT,index=0,help="Affichez tous les enseignements, un seul type ou une combinaison de Cours, TD et TP.")
+with c5: type_sel=st.selectbox("Type d’enseignement",CHOIX_TYPES_ENSEIGNEMENT,index=0,help="Affichez tous les enseignements, un seul type ou une combinaison de Cours, TD, TP et Atelier.")
 if type_sel == "Sélection personnalisée":
     types_personnalises=st.multiselect("Types à afficher",TYPES_ENSEIGNEMENT,default=TYPES_ENSEIGNEMENT,key="types_enseignement_personnalises",help="Choisissez un ou plusieurs types de séances.")
 else:
