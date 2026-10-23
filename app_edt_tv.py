@@ -69,6 +69,15 @@ def _horaire_dans_periode(horaire: Any, periode: str) -> bool:
     debut = _minutes_debut(horaire)
     return limites[0] <= debut < limites[1]
 
+def _separer_enseignants(value: Any) -> list[str]:
+    """Sépare les enseignants d'une cellule lorsque plusieurs noms sont indiqués."""
+    texte = "" if value is None else str(value).strip()
+    noms = re.split(r"\s*(?:/|\+)\s*", texte)
+    return [re.sub(r"\s+", " ", nom).strip(" .;,") for nom in noms if nom.strip(" .;, +/")]
+
+def _cle_enseignant(value: Any) -> str:
+    return _sans_accents(re.sub(r"\s+", " ", "" if value is None else str(value)).strip())
+
 def _jour_index(value: Any) -> int:
     v = _sans_accents(value)
     for i, day in enumerate(JOURS_ORDRE):
@@ -146,7 +155,7 @@ def _records(df: pd.DataFrame) -> list[dict]:
 def _json_safe(records: list[dict]) -> str:
     return json.dumps(records, ensure_ascii=False, separators=(",",":")).replace("</","<\\/")
 
-def _page_html(records: list[dict], title: str, subtitle: str, *, filters: bool, speed: int = 24, autoplay: bool = True, layout: str = "Liste défilante") -> str:
+def _page_html(records: list[dict], title: str, subtitle: str, *, filters: bool, speed: int = 24, autoplay: bool = True, layout: str = "Liste défilante", selected_teachers: list[str] | None = None) -> str:
     data_js = _json_safe(records)
     filter_markup = ""
     if filters:
@@ -156,16 +165,27 @@ def _page_html(records: list[dict], title: str, subtitle: str, *, filters: bool,
           <label>Créneau horaire<select id="f-time"></select></label>
           <label>Promotion<select id="f-promo"></select></label>
           <label>Département<select id="f-dept"></select></label>
+          <div class="filter-field"><span>Enseignant(s)</span>
+            <div class="teacher-picker" id="teacherPicker">
+              <button id="teacherToggle" class="picker-toggle" type="button" aria-expanded="false">Tous les enseignants</button>
+              <div class="teacher-options" id="teacherOptions" hidden>
+                <input id="teacherSearch" type="search" placeholder="Rechercher un enseignant…" aria-label="Rechercher un enseignant">
+                <div class="teacher-checkboxes" id="teacherCheckboxes"></div>
+                <div class="teacher-actions"><button id="teacherClear" type="button">Effacer</button><span id="teacherCount">Tous les enseignants</span></div>
+              </div>
+            </div>
+          </div>
           <label>Type d'enseignement<select id="f-kind"></select></label>
           <button id="apply">Afficher l'EDT</button>
         </div>"""
-    initial_layout = "grid" if layout.lower().startswith("grille") else "list"
+    layout_lc = layout.lower()
+    initial_layout = "teacher" if layout_lc.startswith("par enseignant") else ("grid" if layout_lc.startswith("grille") else "list")
     controls = """
       <button id="pauseBtn" type="button">⏸ Pause</button>
       <button id="fullscreenBtn" type="button">⛶ Plein écran</button>
       <label class="speed-label">Vitesse <input id="speed" type="range" min="5" max="80" step="5" value="24"></label>
-      <label class="view-label">Vue <select id="view"><option value="list">Liste défilante</option><option value="grid">Grille</option></select></label>"""
-    return f"""<!doctype html>
+      <label class="view-label">Vue <select id="view"><option value="list">Liste défilante</option><option value="grid">Grille</option><option value="teacher">Par enseignant</option></select></label>"""
+    return fr"""<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="application-name" content="EDT TV UDL-SBA"><title>{htmlmod.escape(title)}</title>
 <style>
 *{{box-sizing:border-box}} html,body{{margin:0;width:100%;height:100%;font-family:Arial,Helvetica,sans-serif;background:#07111f;color:#f8fafc}}
@@ -174,8 +194,16 @@ body{{display:flex;flex-direction:column;overflow:hidden}}
 .brand h1{{margin:0;font-size:clamp(22px,2.1vw,38px);letter-spacing:.2px}} .brand p{{margin:5px 0 0;color:#dbeafe;font-size:clamp(13px,1vw,18px)}}
 .clock{{font-size:clamp(18px,1.8vw,30px);font-weight:800;white-space:nowrap;text-align:right}} .clock small{{display:block;font-size:.55em;color:#dbeafe;margin-top:3px}}
 .filters{{display:flex;flex-wrap:wrap;gap:12px;align-items:end;padding:12px 22px;background:#0b1728;border-bottom:1px solid #29405b}}
-label{{display:flex;flex-direction:column;gap:5px;color:#bfdbfe;font-size:13px;font-weight:700}} select,button,input{{font:inherit}} select{{min-width:180px;max-width:300px;padding:10px;background:#fff;color:#0f172a;border-radius:8px;border:1px solid #93c5fd}}
+label,.filter-field{{display:flex;flex-direction:column;gap:5px;color:#bfdbfe;font-size:13px;font-weight:700}} select,button,input{{font:inherit}} select{{min-width:180px;max-width:300px;padding:10px;background:#fff;color:#0f172a;border-radius:8px;border:1px solid #93c5fd}}
 button{{background:#0ea5e9;color:#001a2a;border:none;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer}} button:hover{{background:#7dd3fc}}
+.teacher-picker{{position:relative;min-width:220px;max-width:320px;color:#0f172a;font-weight:400}}
+.picker-toggle{{width:100%;min-height:39px;text-align:left;background:#fff;color:#0f172a;border:1px solid #93c5fd;font-weight:600;padding:9px 11px;white-space:normal}}
+.teacher-options{{position:absolute;z-index:30;top:calc(100% + 5px);left:0;width:min(360px,85vw);max-height:360px;padding:10px;background:#fff;border:1px solid #93c5fd;border-radius:9px;box-shadow:0 12px 28px #0007;color:#0f172a}}
+.teacher-options[hidden]{{display:none}} .teacher-options input[type=search]{{width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-bottom:8px;color:#0f172a;background:#fff}}
+.teacher-checkboxes{{max-height:245px;overflow:auto;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;padding:5px 0}}
+.teacher-option{{display:flex;flex-direction:row;align-items:center;gap:8px;padding:6px 4px;color:#0f172a;font-size:13px;font-weight:500;cursor:pointer}}
+.teacher-option input{{flex:0 0 auto}} .teacher-actions{{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:8px;color:#334155;font-size:12px}}
+.teacher-actions button{{background:#e2e8f0;color:#0f172a;padding:6px 9px;font-size:12px}}
 .tools{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 22px;background:#081322;border-bottom:1px solid #263b54}}
 .tools button{{padding:7px 11px;font-size:13px}} .speed-label,.view-label{{flex-direction:row;align-items:center}} input[type=range]{{width:120px}}
 .status{{margin-left:auto;color:#cbd5e1;font-weight:700;font-size:14px}}
@@ -202,6 +230,7 @@ button{{background:#0ea5e9;color:#001a2a;border:none;border-radius:8px;padding:1
 const DATA={data_js};
 const DAYS={json.dumps(JOURS_ORDRE, ensure_ascii=False)};
 const INITIAL_SPEED={int(speed)};
+const PRESELECTED_TEACHERS={json.dumps(selected_teachers or [], ensure_ascii=False)};
 let autoplay={str(bool(autoplay)).lower()}, stopped=false, lastFrame=0, speed=INITIAL_SPEED;
 let activeLayout={json.dumps(initial_layout)};
 const board=document.getElementById('board'), statusEl=document.getElementById('status');
@@ -209,6 +238,8 @@ function esc(s){{return String(s??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'
 function dayIndex(s){{let n=String(s||'').toLowerCase();return DAYS.findIndex(d=>d.toLowerCase()===n);}}
 function timeStart(s){{let m=String(s||'').match(/(\\d{{1,2}})\\s*h\\s*(\\d{{0,2}})/i);return m?Number(m[1])*60+Number(m[2]||0):99999;}}
 function timeMatches(value,selected){{let t=timeStart(value);if(selected==='Matin')return t>=480&&t<750;if(selected==='Après-midi')return t>=750&&t<1020;return value===selected;}}
+function teacherNames(value){{return String(value||'').split(/[\/+]/).map(n=>n.replace(/\s+/g,' ').trim().replace(/^[ .;,]+|[ .;,]+$/g,'')).filter(Boolean);}}
+function teacherKey(value){{return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toLocaleLowerCase('fr');}}
 function natural(a,b){{return String(a).localeCompare(String(b),'fr',{{numeric:true,sensitivity:'base'}});}}
 function uniqueSorted(key, order){{let vals=[...new Set(DATA.map(r=>String(r[key]||'').trim()).filter(Boolean))];if(order)vals.sort((a,b)=>timeStart(a)-timeStart(b)||natural(a,b));else if(key==='Jours')vals.sort((a,b)=>(dayIndex(a)+100)-(dayIndex(b)+100)||natural(a,b));else vals.sort(natural);return vals;}}
 function fillSelect(id, first, vals){{let el=document.getElementById(id);if(!el)return;el.innerHTML='';let opt=document.createElement('option');opt.value='';opt.textContent=first;el.appendChild(opt);vals.forEach(v=>{{let o=document.createElement('option');o.value=v;o.textContent=v;el.appendChild(o);}});}}
@@ -216,10 +247,14 @@ function kind(r){{let code=String(r.Code||'').toLowerCase();let text=(code+' '+S
 function card(r){{let k=kind(r).toLowerCase();return `<article class="card ${{k}}"><div class="subject">${{esc(r.Enseignements||'Enseignement non renseigné')}}</div><div class="badges"><span class="badge ${{k}}">${{esc(r.Code||'Type non renseigné')}}</span><span class="badge">${{esc(r.Horaire||'Horaire non renseigné')}}</span><span class="badge">${{esc(r.Jours||'Jour non renseigné')}}</span></div><div class="details"><span><b>Enseignant(s) :</b> ${{esc(r.Enseignants||'Non renseigné')}}</span><span><b>Lieu :</b> ${{esc(r.Lieu||'Non renseigné')}}</span><span><b>Promotion :</b> ${{esc(r.Promotion||'Non renseignée')}}</span><span><b>Département :</b> ${{esc(r.Département||'Non renseigné')}}</span></div></article>`;}}
 function renderList(rows){{if(!rows.length){{board.innerHTML='<div class="empty">Aucun enseignement ne correspond aux filtres sélectionnés.</div>';return;}}let html='',lastDay='',lastHour='';rows.forEach((r,i)=>{{if(r.Jours!==lastDay){{lastDay=r.Jours;lastHour='';html+=`<h2 class="day-heading">${{esc(lastDay)}}</h2>`;}}if(r.Horaire!==lastHour){{lastHour=r.Horaire;html+=`<h3 class="hour-heading">⏰ ${{esc(lastHour)}}</h3><div class="cards">`;}}html+=card(r);let next=rows[i+1];if(!next||next.Jours!==lastDay||next.Horaire!==lastHour)html+='</div>';}});board.innerHTML=html;}}
 function renderGrid(rows){{if(!rows.length){{board.innerHTML='<div class="empty">Aucun enseignement ne correspond aux filtres sélectionnés.</div>';return;}}let days=[...new Set(rows.map(r=>r.Jours))].sort((a,b)=>(dayIndex(a)+100)-(dayIndex(b)+100));let hours=[...new Set(rows.map(r=>r.Horaire))].sort((a,b)=>timeStart(a)-timeStart(b)||natural(a,b));let html='<table class="grid-table"><thead><tr><th>Créneau</th>'+days.map(d=>`<th>${{esc(d)}}</th>`).join('')+'</tr></thead><tbody>';hours.forEach(h=>{{html+=`<tr><th>${{esc(h)}}</th>`;days.forEach(d=>{{let cell=rows.filter(r=>r.Horaire===h&&r.Jours===d);html+='<td>'+cell.map(r=>`<div class="grid-item"><strong>${{esc(r.Enseignements)}}</strong><small>${{esc(r.Code)}} · ${{esc(r.Promotion)}}<br>${{esc(r.Enseignants)}}<br>${{esc(r.Lieu)}} · ${{esc(r.Département)}}</small></div>`).join('')+'</td>';}});html+='</tr>';}});html+='</tbody></table>';board.innerHTML=html;}}
+function getSelectedTeachers(){{let boxes=document.querySelectorAll('#teacherCheckboxes input[type="checkbox"]');if(boxes.length)return [...boxes].filter(b=>b.checked).map(b=>b.value);return PRESELECTED_TEACHERS;}}
+function renderTeachers(rows){{let chosen=getSelectedTeachers();if(!chosen.length){{board.innerHTML='<div class="empty">Choisissez un ou plusieurs enseignants dans le filtre « Enseignant(s) ».</div>';return;}}let html='';chosen.forEach(name=>{{let matches=rows.filter(r=>teacherNames(r.Enseignants).some(n=>teacherKey(n)===teacherKey(name)));html+=`<h2 class="day-heading">👤 ${{esc(name)}} <span style="font-size:.7em;color:#bfdbfe">— ${{matches.length}} séance(s)</span></h2>`;if(matches.length){{html+='<div class="cards">'+matches.map(card).join('')+'</div>';}}else{{html+='<div class="empty" style="padding:16px">Aucune séance pour cet enseignant avec les autres filtres.</div>';}}}});board.innerHTML=html;}}
 function kindsForSelection(){{let choice=document.getElementById('f-kind')?.value||'';if(!choice)return ['Cours','TD','TP'];if(choice.includes('+'))return choice.split('+').map(x=>x.trim());return [choice];}}
-function getFilteredRows(){{let day=document.getElementById('f-day')?.value||'',tm=document.getElementById('f-time')?.value||'',pr=document.getElementById('f-promo')?.value||'',de=document.getElementById('f-dept')?.value||'',types=kindsForSelection();return DATA.filter(r=>(!day||r.Jours===day)&&(!tm||timeMatches(r.Horaire,tm))&&(!pr||r.Promotion===pr)&&(!de||r.Département===de)&&types.includes(kind(r))).sort((a,b)=>(dayIndex(a.Jours)+100)-(dayIndex(b.Jours)+100)||timeStart(a.Horaire)-timeStart(b.Horaire)||natural(a.Promotion,b.Promotion)||natural(a.Enseignements,b.Enseignements));}}
-function updateRender(){{let rows=getFilteredRows();if(activeLayout==='grid')renderGrid(rows);else renderList(rows);statusEl.textContent=rows.length.toLocaleString('fr-FR')+' séance(s) affichée(s)';board.scrollTop=0;}}
-if(document.getElementById('f-day')){{fillSelect('f-day','Tous les jours',uniqueSorted('Jours'));fillSelect('f-time','Tous les créneaux',['Matin','Après-midi',...uniqueSorted('Horaire',true)]);fillSelect('f-promo','Toutes les promotions',uniqueSorted('Promotion'));fillSelect('f-dept','Tous les départements',uniqueSorted('Département'));fillSelect('f-kind','Tous les enseignements',['Cours','TD','TP','Cours + TD','TD + TP','Cours + TP']);document.getElementById('apply').addEventListener('click',updateRender);['f-day','f-time','f-promo','f-dept','f-kind'].forEach(id=>document.getElementById(id).addEventListener('change',updateRender));}}
+function getFilteredRows(){{let day=document.getElementById('f-day')?.value||'',tm=document.getElementById('f-time')?.value||'',pr=document.getElementById('f-promo')?.value||'',de=document.getElementById('f-dept')?.value||'',types=kindsForSelection(),teachers=getSelectedTeachers(),teacherKeys=teachers.map(teacherKey);return DATA.filter(r=>(!day||r.Jours===day)&&(!tm||timeMatches(r.Horaire,tm))&&(!pr||r.Promotion===pr)&&(!de||r.Département===de)&&(!teacherKeys.length||teacherNames(r.Enseignants).some(n=>teacherKeys.includes(teacherKey(n))))&&types.includes(kind(r))).sort((a,b)=>(dayIndex(a.Jours)+100)-(dayIndex(b.Jours)+100)||timeStart(a.Horaire)-timeStart(b.Horaire)||natural(a.Promotion,b.Promotion)||natural(a.Enseignements,b.Enseignements));}}
+function updateRender(){{let rows=getFilteredRows();if(activeLayout==='grid')renderGrid(rows);else if(activeLayout==='teacher')renderTeachers(rows);else renderList(rows);statusEl.textContent=rows.length.toLocaleString('fr-FR')+' séance(s) affichée(s)';board.scrollTop=0;}}
+function syncTeacherPicker(){{let names=getSelectedTeachers(),button=document.getElementById('teacherToggle'),count=document.getElementById('teacherCount');if(button)button.textContent=names.length?`${{names.length}} enseignant(s) sélectionné(s)`:'Tous les enseignants';if(count)count.textContent=names.length?`${{names.length}} sélectionné(s)`:'Tous les enseignants';}}
+function initTeacherPicker(){{let host=document.getElementById('teacherCheckboxes');if(!host)return;let names=[...new Set(DATA.flatMap(r=>teacherNames(r.Enseignants)).filter(Boolean))].sort(natural);names.forEach((name,i)=>{{let label=document.createElement('label');label.className='teacher-option';label.dataset.search=teacherKey(name);let box=document.createElement('input');box.type='checkbox';box.value=name;box.id='teacher-option-'+i;box.addEventListener('change',()=>{{syncTeacherPicker();updateRender();}});let txt=document.createElement('span');txt.textContent=name;label.append(box,txt);host.appendChild(label);}});let toggle=document.getElementById('teacherToggle'),options=document.getElementById('teacherOptions'),search=document.getElementById('teacherSearch');toggle?.addEventListener('click',()=>{{let open=options.hidden;options.hidden=!open;toggle.setAttribute('aria-expanded',String(open));if(open)search?.focus();}});search?.addEventListener('input',()=>{{let q=teacherKey(search.value);host.querySelectorAll('.teacher-option').forEach(el=>{{el.style.display=el.dataset.search.includes(q)?'flex':'none';}});}});document.getElementById('teacherClear')?.addEventListener('click',()=>{{host.querySelectorAll('input[type="checkbox"]').forEach(b=>b.checked=false);syncTeacherPicker();updateRender();}});document.addEventListener('click',ev=>{{let picker=document.getElementById('teacherPicker');if(picker&&!picker.contains(ev.target)){{options.hidden=true;toggle?.setAttribute('aria-expanded','false');}}}});syncTeacherPicker();}}
+if(document.getElementById('f-day')){{fillSelect('f-day','Tous les jours',uniqueSorted('Jours'));fillSelect('f-time','Tous les créneaux',['Matin','Après-midi',...uniqueSorted('Horaire',true)]);fillSelect('f-promo','Toutes les promotions',uniqueSorted('Promotion'));fillSelect('f-dept','Tous les départements',uniqueSorted('Département'));fillSelect('f-kind','Tous les enseignements',['Cours','TD','TP','Cours + TD','TD + TP','Cours + TP']);initTeacherPicker();document.getElementById('apply').addEventListener('click',updateRender);['f-day','f-time','f-promo','f-dept','f-kind'].forEach(id=>document.getElementById(id).addEventListener('change',updateRender));}}
 let speedEl=document.getElementById('speed');if(speedEl){{speedEl.value=INITIAL_SPEED;speedEl.addEventListener('input',()=>{{speed=Number(speedEl.value);}});}}
 let viewEl=document.getElementById('view');if(viewEl){{viewEl.value=activeLayout;viewEl.addEventListener('change',()=>{{activeLayout=viewEl.value;updateRender();}});}}
 let pauseBtn=document.getElementById('pauseBtn');if(pauseBtn)pauseBtn.addEventListener('click',()=>{{stopped=!stopped;pauseBtn.textContent=stopped?'▶ Reprendre':'⏸ Pause';}});
@@ -264,6 +299,7 @@ else:
 records_all = _records(df)
 promotions = sorted([x for x in df["Promotion"].unique() if x], key=str.casefold)
 departements = sorted([x for x in df["Département"].unique() if x], key=str.casefold)
+enseignants = sorted({nom for valeur in df["Enseignants"] for nom in _separer_enseignants(valeur) if nom}, key=str.casefold)
 jours = [d for d in JOURS_ORDRE if d in set(df["Jours"])]
 jours += sorted([d for d in df["Jours"].unique() if d and d not in jours], key=str.casefold)
 horaires = sorted([h for h in df["Horaire"].unique() if h], key=lambda x: (_minutes_debut(x), x.casefold()))
@@ -286,9 +322,13 @@ if type_sel == "Sélection personnalisée":
     types_personnalises=st.multiselect("Types à afficher",TYPES_ENSEIGNEMENT,default=TYPES_ENSEIGNEMENT,key="types_enseignement_personnalises",help="Choisissez un ou plusieurs types de séances.")
 else:
     types_personnalises=[]
-with c6: affichage=st.radio("Présentation sur TV",["Liste défilante","Grille"],horizontal=True)
+with c6: affichage=st.selectbox("Mode d’affichage",["Liste défilante","Grille","Par enseignant"],index=0)
 with c7: vitesse=st.slider("Vitesse du défilement",5,80,24,5,help="Pixels par seconde environ.")
 with c8: lancer=st.button("📺 Afficher / actualiser la TV",type="primary",use_container_width=True)
+if affichage == "Par enseignant":
+    enseignants_sel = st.multiselect("👤 Choisir un ou plusieurs enseignants", enseignants, default=[], help="Sélectionnez un ou plusieurs noms. Les séances communes à plusieurs enseignants apparaîtront dans le planning de chaque enseignant sélectionné.")
+else:
+    enseignants_sel = []
 filtered=df.copy()
 if jour_sel != TOUS_JOURS: filtered=filtered[filtered["Jours"]==jour_sel]
 if creneaux_sel and TOUS_CRENEAUX not in creneaux_sel:
@@ -301,6 +341,9 @@ if promo_sel != TOUTES_PROMOTIONS: filtered=filtered[filtered["Promotion"]==prom
 if dept_sel != TOUS_DEPARTEMENTS: filtered=filtered[filtered["Département"]==dept_sel]
 types_a_afficher=_types_a_afficher(type_sel,types_personnalises)
 filtered=filtered[filtered["_type_enseignement"].isin(types_a_afficher)]
+if affichage == "Par enseignant" and enseignants_sel:
+    enseignants_sel_norm = {_cle_enseignant(nom) for nom in enseignants_sel}
+    filtered = filtered[filtered["Enseignants"].map(lambda valeur: any(_cle_enseignant(nom) in enseignants_sel_norm for nom in _separer_enseignants(valeur)))]
 filtered=filtered.sort_values(["_jour_tri","_heure_tri","_promo_tri","_ens_tri"],kind="stable")
 filtered_records=_records(filtered)
 a,b,c=st.columns(3)
@@ -308,20 +351,23 @@ a.metric("Séances correspondant au filtre",f"{len(filtered_records):,}".replace
 b.metric("Promotions dans la sélection",filtered["Promotion"].nunique())
 c.metric("Créneaux dans la sélection",filtered["Horaire"].nunique())
 type_txt=" + ".join(types_a_afficher) if type_sel == "Sélection personnalisée" or "+" in type_sel else type_sel
-filtres_txt=f"{jour_sel} · "+(", ".join(creneaux_sel) if creneaux_sel and TOUS_CRENEAUX not in creneaux_sel else TOUS_CRENEAUX)+f" · {promo_sel} · {dept_sel} · {type_txt}"
+enseignants_txt = (" · Enseignant(s) : " + ", ".join(enseignants_sel)) if affichage == "Par enseignant" and enseignants_sel else ""
+filtres_txt=f"{jour_sel} · "+(", ".join(creneaux_sel) if creneaux_sel and TOUS_CRENEAUX not in creneaux_sel else TOUS_CRENEAUX)+f" · {promo_sel} · {dept_sel} · {type_txt}"+enseignants_txt
 st.markdown(f"**Sélection actuelle :** {filtres_txt}")
 if lancer: st.session_state["edt_tv_preview"]=True
 if st.session_state.get("edt_tv_preview",False):
-    if not filtered_records: st.warning("Aucune séance ne correspond aux filtres actuels.")
+    if affichage == "Par enseignant" and not enseignants_sel:
+        st.info("Sélectionnez au moins un enseignant pour afficher son emploi du temps.")
+    elif not filtered_records: st.warning("Aucune séance ne correspond aux filtres actuels.")
     else:
         st.subheader("📺 Aperçu de l’affichage TV")
-        tv_html=_page_html(filtered_records,"Emploi du temps — Faculté de génie électrique - UDL-SBA",filtres_txt,filters=False,speed=vitesse,autoplay=True,layout=affichage)
+        tv_html=_page_html(filtered_records,"Emploi du temps — Faculté de génie électrique - UDL-SBA",filtres_txt,filters=False,speed=vitesse,autoplay=True,layout=affichage,selected_teachers=enseignants_sel)
         components.html(tv_html,height=760,scrolling=False)
         st.caption("Ouvrez cette application dans le navigateur de la TV puis passez en plein écran (F11). L’aperçu défile automatiquement.")
 st.divider()
 st.subheader("💾 Télécharger l’affichage pour TV")
 st.write("Le fichier HTML autonome contient toutes les lignes du fichier Excel chargé. Copiez-le sur une clé USB et ouvrez-le dans le navigateur de la TV ou d’un ordinateur relié à la TV. Il fonctionne hors ligne.")
-usb_html=_page_html(records_all,"Emploi du temps — Faculté de génie électrique - UDL-SBA","Sélectionnez le jour, l’horaire, la promotion, le département et le type d’enseignement sur cet écran TV.",filters=True,speed=vitesse,autoplay=True,layout="Liste défilante")
+usb_html=_page_html(records_all,"Emploi du temps — Faculté de génie électrique - UDL-SBA","Sélectionnez le jour, l’horaire, la promotion, le département, l’enseignant et le type d’enseignement sur cet écran TV.",filters=True,speed=vitesse,autoplay=True,layout="Liste défilante")
 st.download_button("📥 Télécharger le fichier HTML autonome pour clé USB",data=usb_html.encode("utf-8"),file_name="EDT_TV_USB.html",mime="text/html",type="primary")
 st.download_button("📥 Télécharger les données Excel chargées",data=data_bytes,file_name=Path(source_name or "EDT.xlsx").name,mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 with st.expander("ℹ️ Mise en ligne pour obtenir un lien web permanent"):
