@@ -236,7 +236,7 @@ data_bytes, source_name = None, None
 if uploaded is not None:
     data_bytes, source_name = uploaded.getvalue(), uploaded.name
 else:
-    default_path = Path(__file__).with_name("EDT_Edition (96).xlsx")
+    default_path = Path(__file__).with_name("EDT_Edition.xlsx")
     if default_path.exists():
         data_bytes, source_name = default_path.read_bytes(), default_path.name
         st.info(f"Fichier d'exemple chargé automatiquement : **{source_name}**. Téléversez un autre fichier Excel pour le remplacer.")
