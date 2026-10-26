@@ -507,7 +507,7 @@ function updateAutoSlotRender(){{
   else if(next)positionText='Prochain : '+next.label;
   else positionText='Journée terminée';
   if(current.length&&next)positionText+=' · ensuite : '+next.label;
-  statusEl.textContent='AUTO · '+DEFAULT_DEPARTMENT+' · '+pcDayName()+' · '+positionText+' · '+result.visibleCount+' séance(s) restantes';
+  statusEl.textContent='MODE AUTOMATIQUE · DÉPARTEMENT '+DEFAULT_DEPARTMENT+' · '+pcDayName()+' · '+positionText+' · '+result.visibleCount+' séance(s) restantes';
   const stamp=document.getElementById('autoStatus');
   if(stamp)stamp.textContent='📅 '+pcDayName()+' · '+DEFAULT_DEPARTMENT+' · Créneau actuel + tous les suivants';
 }}
