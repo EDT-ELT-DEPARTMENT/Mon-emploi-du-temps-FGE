@@ -271,7 +271,7 @@ def _publications_pour_html(publications: list[dict]) -> list[dict]:
         result.append(item)
     return result
 
-def _page_html(records: list[dict], title: str, subtitle: str, *, filters: bool, speed: int = 24, autoplay: bool = True, layout: str = "Liste défilante", selected_teachers: list[str] | None = None, publications: list[dict] | None = None) -> str:
+def _page_html(records: list[dict], title: str, subtitle: str, *, filters: bool, speed: int = 24, autoplay: bool = True, layout: str = "Liste défilante", selected_teachers: list[str] | None = None, publications: list[dict] | None = None, auto_daily: bool = False, minutes_per_slot: int = 20, default_department: str = "ELT") -> str:
     data_js = _json_safe(records)
     news_js = _json_safe(_publications_pour_html(publications or []))
     filter_markup = ""
@@ -303,6 +303,12 @@ def _page_html(records: list[dict], title: str, subtitle: str, *, filters: bool,
       <label class="speed-label">Vitesse <input id="speed" type="range" min="5" max="80" step="5" value="24"></label>
       <label class="view-label">Vue <select id="view"><option value="list">Liste défilante</option><option value="grid">Grille</option><option value="teacher">Par enseignant</option></select></label>
       <div class="type-legend" aria-label="Légende des couleurs"><span class="legend-item cours"><i class="legend-dot"></i>Cours</span><span class="legend-item td"><i class="legend-dot"></i>TD</span><span class="legend-item tp"><i class="legend-dot"></i>TP</span><span class="legend-item atelier"><i class="legend-dot"></i>Atelier</span></div>"""
+    auto_control_markup = ""
+    if filters:
+        checked = " checked" if auto_daily else ""
+        auto_control_markup = f'<label class="auto-toggle"><input id="autoDaily" type="checkbox"{checked}> Automatique : jour du PC · {htmlmod.escape(default_department)} · {int(minutes_per_slot)} min/créneau</label>'
+    elif auto_daily:
+        auto_control_markup = f'<span class="auto-badge" id="autoStatus">📅 Planning automatique du jour · {htmlmod.escape(default_department)} · {int(minutes_per_slot)} min par créneau</span>'
     return fr"""<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="application-name" content="EDT TV UDL-SBA"><title>{htmlmod.escape(title)}</title>
 <style>
@@ -329,6 +335,9 @@ button{{background:#0ea5e9;color:#001a2a;border:none;border-radius:8px;padding:1
 .legend-dot{{width:11px;height:11px;border-radius:50%;display:inline-block}}
 .legend-item.cours .legend-dot{{background:#60a5fa}} .legend-item.td .legend-dot{{background:#4ade80}} .legend-item.tp .legend-dot{{background:#f87171}} .legend-item.atelier .legend-dot{{background:#c084fc}}
 .status{{margin-left:auto;color:#cbd5e1;font-weight:700;font-size:14px}}
+.auto-toggle{{display:flex;flex-direction:row;align-items:center;gap:8px;color:#fef3c7;background:#713f12;border:1px solid #fbbf24;border-radius:8px;padding:8px 10px;font-size:12px;font-weight:800}}
+ .auto-toggle input{{width:16px;height:16px;accent-color:#f59e0b}}
+ .auto-badge{{display:inline-flex;align-items:center;padding:7px 10px;border-radius:8px;background:#713f12;color:#fef3c7;border:1px solid #fbbf24;font-size:12px;font-weight:900}}
 .news-panel{{display:flex;align-items:center;gap:18px;flex:0 0 auto;padding:10px 22px;background:linear-gradient(110deg,#422006,#78350f 48%,#1e293b);border-bottom:2px solid #fbbf24;max-height:180px;overflow:hidden}}
 .news-panel[hidden]{{display:none}}
 .news-copy{{min-width:0;flex:1;overflow:hidden}}
@@ -365,7 +374,7 @@ button{{background:#0ea5e9;color:#001a2a;border:none;border-radius:8px;padding:1
 <body>
 <header class="top"><div class="brand"><h1>{htmlmod.escape(title)}</h1><p>{htmlmod.escape(subtitle)}</p></div><div class="clock"><span id="clock">--:--:--</span><small id="date"></small></div></header>
 {filter_markup}
-<div class="tools">{controls}<span class="status" id="status">Chargement des emplois du temps…</span></div>
+<div class="tools">{controls}{auto_control_markup}<span class="status" id="status">Chargement des emplois du temps…</span></div>
 <section class="news-panel" id="newsPanel" hidden aria-live="polite">
   <div class="news-copy">
     <div class="news-topline"><span class="news-category" id="newsCategory">AVIS</span><strong class="news-title" id="newsTitle"></strong></div>
@@ -382,13 +391,21 @@ const NEWS={news_js};
 const DAYS={json.dumps(JOURS_ORDRE, ensure_ascii=False)};
 const INITIAL_SPEED={int(speed)};
 const PRESELECTED_TEACHERS={json.dumps(selected_teachers or [], ensure_ascii=False)};
+const AUTO_DAILY_DEFAULT={str(bool(auto_daily)).lower()};
+const AUTO_MINUTES_PER_SLOT={int(minutes_per_slot)};
+const DEFAULT_DEPARTMENT={json.dumps(default_department, ensure_ascii=False)};
 let autoplay={str(bool(autoplay)).lower()}, stopped=false, lastFrame=0, speed=INITIAL_SPEED;
+let autoMode=AUTO_DAILY_DEFAULT, autoDateKey='', autoBaseTimestamp=Date.now(), autoDaySlots=[], autoStartIndex=0, autoRenderedSignature='';
 let activeLayout={json.dumps(initial_layout)};
 const board=document.getElementById('board'), statusEl=document.getElementById('status');
 function esc(s){{return String(s??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));}}
 function dayIndex(s){{let n=String(s||'').toLowerCase();return DAYS.findIndex(d=>d.toLowerCase()===n);}}
 function timeStart(s){{let m=String(s||'').match(/(\d{{1,2}})\s*h\s*(\d{{0,2}})/i);return m?Number(m[1])*60+Number(m[2]||0):99999;}}
 function timeMatches(value,selected){{let t=timeStart(value);if(selected==='Matin')return t>=480&&t<750;if(selected==='Après-midi')return t>=750&&t<1020;return value===selected;}}
+function normalizeKey(value){{return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toLocaleLowerCase('fr');}}
+function pcDayName(){{return new Intl.DateTimeFormat('fr-FR',{{weekday:'long'}}).format(new Date());}}
+function pcDateKey(now){{return `${{now.getFullYear()}}-${{String(now.getMonth()+1).padStart(2,'0')}}-${{String(now.getDate()).padStart(2,'0')}}`;}}
+function timeRange(value){{const matches=[...String(value||'').matchAll(/(\d{{1,2}})\s*h\s*(\d{{0,2}})/gi)].map(m=>Number(m[1])*60+Number(m[2]||0));const start=matches.length?matches[0]:timeStart(value);const end=matches.length>1?matches[1]:start+90;return {{start,end}};}}
 function teacherNames(value){{return String(value||'').split(/[\/+]/).map(n=>n.replace(/\s+/g,' ').trim().replace(/^[ .;,]+|[ .;,]+$/g,'')).filter(Boolean);}}
 function teacherKey(value){{return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toLocaleLowerCase('fr');}}
 function natural(a,b){{return String(a).localeCompare(String(b),'fr',{{numeric:true,sensitivity:'base'}});}}
@@ -400,20 +417,24 @@ function renderList(rows){{if(!rows.length){{board.innerHTML='<div class="empty"
 function renderGrid(rows){{if(!rows.length){{board.innerHTML='<div class="empty">Aucun enseignement ne correspond aux filtres sélectionnés.</div>';return;}}let days=[...new Set(rows.map(r=>r.Jours))].sort((a,b)=>(dayIndex(a)+100)-(dayIndex(b)+100));let hours=[...new Set(rows.map(r=>r.Horaire))].sort((a,b)=>timeStart(a)-timeStart(b)||natural(a,b));let html='<table class="grid-table"><thead><tr><th>Créneau</th>'+days.map(d=>`<th>${{esc(d)}}</th>`).join('')+'</tr></thead><tbody>';hours.forEach(h=>{{html+=`<tr><th>${{esc(h)}}</th>`;days.forEach(d=>{{let cell=rows.filter(r=>r.Horaire===h&&r.Jours===d);html+='<td>'+cell.map(r=>`<div class="grid-item ${{kind(r).toLowerCase()}}"><strong>${{esc(r.Enseignements)}}</strong><small>${{esc(r.Code)}} · ${{esc(r.Promotion)}}<br>${{esc(r.Enseignants)}}<br>${{esc(r.Lieu)}} · ${{esc(r.Département)}}</small></div>`).join('')+'</td>';}});html+='</tr>';}});html+='</tbody></table>';board.innerHTML=html;}}
 function getSelectedTeachers(){{let boxes=document.querySelectorAll('#teacherCheckboxes input[type="checkbox"]');if(boxes.length)return [...boxes].filter(b=>b.checked).map(b=>b.value);return PRESELECTED_TEACHERS;}}
 function renderTeachers(rows){{let chosen=getSelectedTeachers();if(!chosen.length){{board.innerHTML='<div class="empty">Choisissez un ou plusieurs enseignants dans le filtre « Enseignant(s) ».</div>';return;}}let html='';chosen.forEach(name=>{{let matches=rows.filter(r=>teacherNames(r.Enseignants).some(n=>teacherKey(n)===teacherKey(name)));html+=`<h2 class="day-heading">👤 ${{esc(name)}} <span style="font-size:.7em;color:#bfdbfe">— ${{matches.length}} séance(s)</span></h2>`;if(matches.length){{html+='<div class="cards">'+matches.map(card).join('')+'</div>';}}else{{html+='<div class="empty" style="padding:16px">Aucune séance pour cet enseignant avec les autres filtres.</div>';}}}});board.innerHTML=html;}}
+function autoRowsForPcDay(){{const day=normalizeKey(pcDayName());return DATA.filter(r=>normalizeKey(r.Département)===normalizeKey(DEFAULT_DEPARTMENT)&&normalizeKey(r.Jours)===day).sort((a,b)=>timeStart(a.Horaire)-timeStart(b.Horaire)||natural(a.Promotion,b.Promotion)||natural(a.Enseignements,b.Enseignements));}}
+function initializeAutoDay(now,rows){{const key=pcDateKey(now);if(key===autoDateKey)return;autoDateKey=key;autoBaseTimestamp=Date.now();autoRenderedSignature='';autoDaySlots=[...new Set(rows.map(r=>String(r.Horaire||'').trim()).filter(Boolean))].sort((a,b)=>timeStart(a)-timeStart(b)||natural(a,b));const minute=now.getHours()*60+now.getMinutes();let idx=autoDaySlots.findIndex(h=>{{const rg=timeRange(h);return rg.start<=minute&&minute<rg.end;}});if(idx<0)idx=autoDaySlots.findIndex(h=>timeRange(h).start>minute);autoStartIndex=idx>=0?idx:0;}}
+function updateAutoSlotRender(){{const now=new Date(),rows=autoRowsForPcDay();initializeAutoDay(now,rows);if(!rows.length||!autoDaySlots.length){{const msg='Aucune séance du département '+DEFAULT_DEPARTMENT+' n’est programmée pour '+pcDayName()+'.';if(autoRenderedSignature!=='EMPTY|'+pcDateKey(now)){{board.innerHTML='<div class="empty">'+esc(msg)+'</div>';autoRenderedSignature='EMPTY|'+pcDateKey(now);}}statusEl.textContent='Automatique · '+DEFAULT_DEPARTMENT+' · '+pcDayName();return;}}const duration=AUTO_MINUTES_PER_SLOT*60*1000;const elapsed=Math.max(0,Date.now()-autoBaseTimestamp);const step=Math.floor(elapsed/duration);const idx=(autoStartIndex+step)%autoDaySlots.length;const slot=autoDaySlots[idx];const signature=pcDateKey(now)+'|'+slot;if(signature!==autoRenderedSignature){{const slotRows=rows.filter(r=>String(r.Horaire||'').trim()===slot);renderList(slotRows);board.scrollTop=0;autoRenderedSignature=signature;}}const remaining=Math.max(0,duration-(elapsed%duration));const mm=String(Math.floor(remaining/60000)).padStart(2,'0'),ss=String(Math.floor((remaining%60000)/1000)).padStart(2,'0');statusEl.textContent='AUTO · '+DEFAULT_DEPARTMENT+' · '+pcDayName()+' · '+slot+' · suivant dans '+mm+':'+ss;const stamp=document.getElementById('autoStatus');if(stamp)stamp.textContent='📅 '+pcDayName()+' · '+DEFAULT_DEPARTMENT+' · Créneau '+(idx+1)+'/'+autoDaySlots.length;}}
+function disableAutomaticMode(){{const autoEl=document.getElementById('autoDaily');if(autoEl&&autoEl.checked)autoEl.checked=false;autoMode=false;autoRenderedSignature='';}}
 function kindsForSelection(){{let choice=document.getElementById('f-kind')?.value||'';if(!choice)return ['Cours','TD','TP','Atelier'];if(choice.includes('+'))return choice.split('+').map(x=>x.trim());return [choice];}}
 function getFilteredRows(){{let day=document.getElementById('f-day')?.value||'',tm=document.getElementById('f-time')?.value||'',pr=document.getElementById('f-promo')?.value||'',de=document.getElementById('f-dept')?.value||'',types=kindsForSelection(),teachers=getSelectedTeachers(),teacherKeys=teachers.map(teacherKey);return DATA.filter(r=>(!day||r.Jours===day)&&(!tm||timeMatches(r.Horaire,tm))&&(!pr||r.Promotion===pr)&&(!de||r.Département===de)&&(!teacherKeys.length||teacherNames(r.Enseignants).some(n=>teacherKeys.includes(teacherKey(n))))&&types.includes(kind(r))).sort((a,b)=>(dayIndex(a.Jours)+100)-(dayIndex(b.Jours)+100)||timeStart(a.Horaire)-timeStart(b.Horaire)||natural(a.Promotion,b.Promotion)||natural(a.Enseignements,b.Enseignements));}}
-function updateRender(){{let rows=getFilteredRows();if(activeLayout==='grid')renderGrid(rows);else if(activeLayout==='teacher')renderTeachers(rows);else renderList(rows);statusEl.textContent=rows.length.toLocaleString('fr-FR')+' séance(s) affichée(s)';board.scrollTop=0;}}
+function updateRender(){{if(autoMode){{updateAutoSlotRender();return;}}let rows=getFilteredRows();if(activeLayout==='grid')renderGrid(rows);else if(activeLayout==='teacher')renderTeachers(rows);else renderList(rows);statusEl.textContent=rows.length.toLocaleString('fr-FR')+' séance(s) affichée(s)';board.scrollTop=0;}}
 function syncTeacherPicker(){{let names=getSelectedTeachers(),button=document.getElementById('teacherToggle'),count=document.getElementById('teacherCount');if(button)button.textContent=names.length?`${{names.length}} enseignant(s) sélectionné(s)`:'Tous les enseignants';if(count)count.textContent=names.length?`${{names.length}} sélectionné(s)`:'Tous les enseignants';}}
-function initTeacherPicker(){{let host=document.getElementById('teacherCheckboxes');if(!host)return;let names=[...new Set(DATA.flatMap(r=>teacherNames(r.Enseignants)).filter(Boolean))].sort(natural);names.forEach((name,i)=>{{let label=document.createElement('label');label.className='teacher-option';label.dataset.search=teacherKey(name);let box=document.createElement('input');box.type='checkbox';box.value=name;box.id='teacher-option-'+i;box.addEventListener('change',()=>{{syncTeacherPicker();updateRender();}});let txt=document.createElement('span');txt.textContent=name;label.append(box,txt);host.appendChild(label);}});let toggle=document.getElementById('teacherToggle'),options=document.getElementById('teacherOptions'),search=document.getElementById('teacherSearch');toggle?.addEventListener('click',()=>{{let open=options.hidden;options.hidden=!open;toggle.setAttribute('aria-expanded',String(open));if(open)search?.focus();}});search?.addEventListener('input',()=>{{let q=teacherKey(search.value);host.querySelectorAll('.teacher-option').forEach(el=>{{el.style.display=el.dataset.search.includes(q)?'flex':'none';}});}});document.getElementById('teacherClear')?.addEventListener('click',()=>{{host.querySelectorAll('input[type="checkbox"]').forEach(b=>b.checked=false);syncTeacherPicker();updateRender();}});document.addEventListener('click',ev=>{{let picker=document.getElementById('teacherPicker');if(picker&&!picker.contains(ev.target)){{options.hidden=true;toggle?.setAttribute('aria-expanded','false');}}}});syncTeacherPicker();}}
+function initTeacherPicker(){{let host=document.getElementById('teacherCheckboxes');if(!host)return;let names=[...new Set(DATA.flatMap(r=>teacherNames(r.Enseignants)).filter(Boolean))].sort(natural);names.forEach((name,i)=>{{let label=document.createElement('label');label.className='teacher-option';label.dataset.search=teacherKey(name);let box=document.createElement('input');box.type='checkbox';box.value=name;box.id='teacher-option-'+i;box.addEventListener('change',()=>{{disableAutomaticMode();syncTeacherPicker();updateRender();}});let txt=document.createElement('span');txt.textContent=name;label.append(box,txt);host.appendChild(label);}});let toggle=document.getElementById('teacherToggle'),options=document.getElementById('teacherOptions'),search=document.getElementById('teacherSearch');toggle?.addEventListener('click',()=>{{let open=options.hidden;options.hidden=!open;toggle.setAttribute('aria-expanded',String(open));if(open)search?.focus();}});search?.addEventListener('input',()=>{{let q=teacherKey(search.value);host.querySelectorAll('.teacher-option').forEach(el=>{{el.style.display=el.dataset.search.includes(q)?'flex':'none';}});}});document.getElementById('teacherClear')?.addEventListener('click',()=>{{disableAutomaticMode();host.querySelectorAll('input[type="checkbox"]').forEach(b=>b.checked=false);syncTeacherPicker();updateRender();}});document.addEventListener('click',ev=>{{let picker=document.getElementById('teacherPicker');if(picker&&!picker.contains(ev.target)){{options.hidden=true;toggle?.setAttribute('aria-expanded','false');}}}});syncTeacherPicker();}}
 function renderNews(index){{let panel=document.getElementById('newsPanel');if(!panel)return;if(!NEWS.length){{panel.hidden=true;return;}}let item=NEWS[index%NEWS.length];panel.hidden=false;document.getElementById('newsCategory').textContent=item.category||'Avis';document.getElementById('newsTitle').textContent=item.title||'Information';document.getElementById('newsMeta').textContent=[item.audience||'Étudiants et enseignants',item.created_at?'Publié le '+item.created_at:''].filter(Boolean).join(' · ');document.getElementById('newsBody').textContent=item.body||'';let link=document.getElementById('newsAttachment'),img=document.getElementById('newsImage');link.hidden=true;link.removeAttribute('href');img.hidden=true;img.removeAttribute('src');if(item.attachment_data&&item.attachment_name){{link.href=item.attachment_data;link.download=item.attachment_name;link.textContent='📎 Ouvrir / télécharger : '+item.attachment_name;link.hidden=false;if(String(item.attachment_mime||'').startsWith('image/')){{img.src=item.attachment_data;img.alt=item.attachment_name;img.hidden=false;}}}}}}
 let newsIndex=0;renderNews(newsIndex);if(NEWS.length>1)setInterval(()=>{{newsIndex=(newsIndex+1)%NEWS.length;renderNews(newsIndex);}},14000);
-if(document.getElementById('f-day')){{fillSelect('f-day','Tous les jours',uniqueSorted('Jours'));fillSelect('f-time','Tous les créneaux',['Matin','Après-midi',...uniqueSorted('Horaire',true)]);fillSelect('f-promo','Toutes les promotions',uniqueSorted('Promotion'));fillSelect('f-dept','Tous les départements',uniqueSorted('Département'));fillSelect('f-kind','Tous les enseignements',['Cours','TD','TP','Atelier','Cours + TD','TD + TP','Cours + TP']);initTeacherPicker();document.getElementById('apply').addEventListener('click',updateRender);['f-day','f-time','f-promo','f-dept','f-kind'].forEach(id=>document.getElementById(id).addEventListener('change',updateRender));}}
+if(document.getElementById('f-day')){{fillSelect('f-day','Tous les jours',uniqueSorted('Jours'));fillSelect('f-time','Tous les créneaux',['Matin','Après-midi',...uniqueSorted('Horaire',true)]);fillSelect('f-promo','Toutes les promotions',uniqueSorted('Promotion'));fillSelect('f-dept','Tous les départements',uniqueSorted('Département'));fillSelect('f-kind','Tous les enseignements',['Cours','TD','TP','Atelier','Cours + TD','TD + TP','Cours + TP']);const daySelect=document.getElementById('f-day');const today=normalizeKey(pcDayName());const todayOpt=[...daySelect.options].find(o=>normalizeKey(o.value)===today);if(todayOpt)daySelect.value=todayOpt.value;const deptSelect=document.getElementById('f-dept');const eltOpt=[...deptSelect.options].find(o=>normalizeKey(o.value)===normalizeKey(DEFAULT_DEPARTMENT));if(eltOpt)deptSelect.value=eltOpt.value;initTeacherPicker();const autoEl=document.getElementById('autoDaily');if(autoEl){{autoMode=autoEl.checked;autoEl.addEventListener('change',()=>{{autoMode=autoEl.checked;autoDateKey='';autoRenderedSignature='';updateRender();}});}}document.getElementById('apply').addEventListener('click',()=>{{disableAutomaticMode();updateRender();}});['f-day','f-time','f-promo','f-dept','f-kind'].forEach(id=>document.getElementById(id).addEventListener('change',()=>{{disableAutomaticMode();updateRender();}}));}}
 let speedEl=document.getElementById('speed');if(speedEl){{speedEl.value=INITIAL_SPEED;speedEl.addEventListener('input',()=>{{speed=Number(speedEl.value);}});}}
 let viewEl=document.getElementById('view');if(viewEl){{viewEl.value=activeLayout;viewEl.addEventListener('change',()=>{{activeLayout=viewEl.value;updateRender();}});}}
 let pauseBtn=document.getElementById('pauseBtn');if(pauseBtn)pauseBtn.addEventListener('click',()=>{{stopped=!stopped;pauseBtn.textContent=stopped?'▶ Reprendre':'⏸ Pause';}});
 let fsBtn=document.getElementById('fullscreenBtn');if(fsBtn)fsBtn.addEventListener('click',()=>{{if(!document.fullscreenElement)document.documentElement.requestFullscreen?.();else document.exitFullscreen?.();}});
 function tickClock(){{const now=new Date();document.getElementById('clock').textContent=now.toLocaleTimeString('fr-FR');document.getElementById('date').textContent=now.toLocaleDateString('fr-FR',{{weekday:'long',year:'numeric',month:'long',day:'numeric'}});}}
-setInterval(tickClock,1000);tickClock();
+setInterval(()=>{{tickClock();if(autoMode)updateAutoSlotRender();}},1000);tickClock();
 function scrollFrame(ts){{if(!lastFrame)lastFrame=ts;let dt=Math.min(50,ts-lastFrame);lastFrame=ts;if(autoplay&&!stopped&&board.scrollHeight>board.clientHeight+10){{board.scrollTop+=speed*dt/1000;if(board.scrollTop+board.clientHeight>=board.scrollHeight-2)board.scrollTop=0;}}requestAnimationFrame(scrollFrame);}}
 updateRender();requestAnimationFrame(scrollFrame);
 </script></body></html>"""
@@ -617,18 +638,23 @@ else:
 
 st.divider()
 st.subheader("🎛️ Choisir l’EDT à afficher")
+mode_auto_jour = st.checkbox("📅 Affichage automatique par défaut : séances du jour du PC, département ELT, changement de créneau toutes les 20 minutes", value=True, key="mode_auto_jour_elt")
+jours_options = [TOUS_JOURS]+jours
+nom_jour_pc = {0:"Lundi", 1:"Mardi", 2:"Mercredi", 3:"Jeudi", 4:"Vendredi", 5:"Samedi", 6:"Dimanche"}[date.today().weekday()]
+jour_index_defaut = next((i for i, j in enumerate(jours_options) if _sans_accents(j)==_sans_accents(nom_jour_pc)), 0)
+idx_dept_elt = next((i+1 for i, d in enumerate(departements) if _sans_accents(d)=="elt"), 0)
 c1,c2,c3,c4=st.columns([1,1.45,1.35,1])
-with c1: jour_sel=st.selectbox("Jour",[TOUS_JOURS]+jours,index=0)
-with c2: creneaux_sel=st.multiselect("Créneau(x) horaire(s)",[TOUS_CRENEAUX]+CHOIX_PERIODES_HORAIRES+horaires,default=[TOUS_CRENEAUX],help="Matin : séances débutant entre 08h00 et 12h30. Après-midi : séances débutant entre 12h30 et 17h00. Vous pouvez aussi choisir des créneaux précis.")
-with c3: promo_sel=st.selectbox("Promotion",[TOUTES_PROMOTIONS]+promotions,index=0)
-with c4: dept_sel=st.selectbox("Département",[TOUS_DEPARTEMENTS]+departements,index=0)
+with c1: jour_sel=st.selectbox("Jour",jours_options,index=jour_index_defaut,disabled=mode_auto_jour)
+with c2: creneaux_sel=st.multiselect("Créneau(x) horaire(s)",[TOUS_CRENEAUX]+CHOIX_PERIODES_HORAIRES+horaires,default=[TOUS_CRENEAUX],disabled=mode_auto_jour,help="Décochez le mode automatique pour sélectionner les créneaux manuellement. Matin : 08h00–12h30 ; après-midi : 12h30–17h00.")
+with c3: promo_sel=st.selectbox("Promotion",[TOUTES_PROMOTIONS]+promotions,index=0,disabled=mode_auto_jour)
+with c4: dept_sel=st.selectbox("Département",[TOUS_DEPARTEMENTS]+departements,index=idx_dept_elt, disabled=mode_auto_jour, help="Le mode automatique affiche toujours le département ELT. Décochez-le pour utiliser les filtres manuels.")
 c5,c6,c7,c8=st.columns([1.45,1.15,1,1.35])
-with c5: type_sel=st.selectbox("Type d’enseignement",CHOIX_TYPES_ENSEIGNEMENT,index=0,help="Affichez tous les enseignements, un seul type ou une combinaison de Cours, TD, TP et Atelier.")
+with c5: type_sel=st.selectbox("Type d’enseignement",CHOIX_TYPES_ENSEIGNEMENT,index=0,disabled=mode_auto_jour,help="Décochez le mode automatique pour choisir manuellement un type d’enseignement.")
 if type_sel == "Sélection personnalisée":
-    types_personnalises=st.multiselect("Types à afficher",TYPES_ENSEIGNEMENT,default=TYPES_ENSEIGNEMENT,key="types_enseignement_personnalises",help="Choisissez un ou plusieurs types de séances.")
+    types_personnalises=st.multiselect("Types à afficher",TYPES_ENSEIGNEMENT,default=TYPES_ENSEIGNEMENT,key="types_enseignement_personnalises",disabled=mode_auto_jour,help="Choisissez un ou plusieurs types de séances.")
 else:
     types_personnalises=[]
-with c6: affichage=st.selectbox("Mode d’affichage",["Liste défilante","Grille","Par enseignant"],index=0)
+with c6: affichage=st.selectbox("Mode d’affichage",["Liste défilante","Grille","Par enseignant"],index=0,disabled=mode_auto_jour)
 with c7: vitesse=st.slider("Vitesse du défilement",5,80,24,5,help="Pixels par seconde environ.")
 with c8: lancer=st.button("📺 Afficher / actualiser la TV",type="primary",use_container_width=True)
 if affichage == "Par enseignant":
@@ -660,20 +686,32 @@ type_txt=" + ".join(types_a_afficher) if type_sel == "Sélection personnalisée"
 enseignants_txt = (" · Enseignant(s) : " + ", ".join(enseignants_sel)) if affichage == "Par enseignant" and enseignants_sel else ""
 filtres_txt=f"{jour_sel} · "+(", ".join(creneaux_sel) if creneaux_sel and TOUS_CRENEAUX not in creneaux_sel else TOUS_CRENEAUX)+f" · {promo_sel} · {dept_sel} · {type_txt}"+enseignants_txt
 st.markdown(f"**Sélection actuelle :** {filtres_txt}")
+if "edt_tv_preview" not in st.session_state:
+    st.session_state["edt_tv_preview"] = True
 if lancer: st.session_state["edt_tv_preview"]=True
 if st.session_state.get("edt_tv_preview",False):
-    if affichage == "Par enseignant" and not enseignants_sel:
+    if mode_auto_jour:
+        df_elt_auto = df[df["Département"].map(_sans_accents)=="elt"].copy()
+        if df_elt_auto.empty:
+            st.warning("Aucune séance trouvée pour le département ELT dans le fichier source.")
+        else:
+            st.subheader("📺 Aperçu TV — planning automatique du jour (ELT)")
+            st.info("Le jour est détecté selon l’horloge du navigateur/PC qui affiche cette page. Seuls les créneaux présents dans le fichier source pour ELT et aujourd’hui sont utilisés. Chaque créneau reste à l’écran 20 minutes avant le passage au suivant.")
+            tv_html=_page_html(_records(df_elt_auto),"Emploi du temps — Département ELT · UDL-SBA","Planning automatique du jour · Département ELT · changement de créneau toutes les 20 minutes",filters=False,speed=vitesse,autoplay=True,layout="Liste défilante",selected_teachers=[],publications=publications_actives,auto_daily=True,minutes_per_slot=20,default_department="ELT")
+            components.html(tv_html,height=760,scrolling=False)
+            st.caption("Le changement de jour est automatique d’après l’horloge du PC. Les filtres manuels sont conservés : décochez le mode automatique pour afficher un autre jour ou un autre département.")
+    elif affichage == "Par enseignant" and not enseignants_sel:
         st.info("Sélectionnez au moins un enseignant pour afficher son emploi du temps.")
     elif not filtered_records: st.warning("Aucune séance ne correspond aux filtres actuels.")
     else:
         st.subheader("📺 Aperçu de l’affichage TV")
-        tv_html=_page_html(filtered_records,"Emploi du temps — Faculté de génie électrique - UDL-SBA",filtres_txt,filters=False,speed=vitesse,autoplay=True,layout=affichage,selected_teachers=enseignants_sel,publications=publications_actives)
+        tv_html=_page_html(filtered_records,"Emploi du temps — Faculté de génie électrique - UDL-SBA",filtres_txt,filters=False,speed=vitesse,autoplay=True,layout=affichage,selected_teachers=enseignants_sel,publications=publications_actives,auto_daily=False)
         components.html(tv_html,height=760,scrolling=False)
         st.caption("Ouvrez cette application dans le navigateur de la TV puis passez en plein écran (F11). L’aperçu défile automatiquement.")
 st.divider()
 st.subheader("💾 Télécharger l’affichage pour TV")
 st.write("Le fichier HTML autonome contient toutes les lignes du fichier Excel chargé et les publications actives au moment du téléchargement. Les annonces défilent dans un bandeau d'information. Les pièces jointes de petite taille sont intégrées pour une consultation hors ligne.")
-usb_html=_page_html(records_all,"Emploi du temps — Faculté de génie électrique - UDL-SBA","Sélectionnez le jour, l’horaire, la promotion, le département, l’enseignant et le type d’enseignement sur cet écran TV.",filters=True,speed=vitesse,autoplay=True,layout="Liste défilante",publications=publications_actives)
+usb_html=_page_html(records_all,"Emploi du temps — Faculté de génie électrique - UDL-SBA","Planning automatique du jour pour ELT ; décochez le mode automatique pour utiliser les filtres manuels.",filters=True,speed=vitesse,autoplay=True,layout="Liste défilante",publications=publications_actives,auto_daily=True,minutes_per_slot=20,default_department="ELT")
 st.download_button("📥 Télécharger le fichier HTML autonome pour clé USB",data=usb_html.encode("utf-8"),file_name="EDT_TV_USB.html",mime="text/html",type="primary")
 st.download_button("📥 Télécharger les données Excel chargées",data=data_bytes,file_name=Path(source_name or "EDT.xlsx").name,mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 with st.expander("ℹ️ Mise en ligne pour obtenir un lien web permanent"):
