@@ -302,6 +302,7 @@ def _page_html(records: list[dict], title: str, subtitle: str, *, filters: bool,
       <button id="fullscreenBtn" type="button">⛶ Plein écran</button>
       <label class="speed-label">Vitesse <input id="speed" type="range" min="5" max="80" step="5" value="24"></label>
       <label class="view-label">Vue <select id="view"><option value="list">Liste défilante</option><option value="grid">Grille</option><option value="teacher">Par enseignant</option></select></label>
+      <label class="news-mode-toggle"><input id="newsFullMode" type="checkbox" checked> Avis en plein écran (automatique)</label>
       <div class="type-legend" aria-label="Légende des couleurs"><span class="legend-item cours"><i class="legend-dot"></i>Cours</span><span class="legend-item td"><i class="legend-dot"></i>TD</span><span class="legend-item tp"><i class="legend-dot"></i>TP</span><span class="legend-item atelier"><i class="legend-dot"></i>Atelier</span></div>"""
     auto_control_markup = ""
     if filters:
@@ -350,6 +351,16 @@ button{{background:#0ea5e9;color:#001a2a;border:none;border-radius:8px;padding:1
 #newsImage{{max-height:90px;max-width:130px;object-fit:contain;border-radius:8px;background:#fff;padding:3px}}
 .news-stamp{{flex:0 0 auto;text-align:center;color:#fde68a;font-size:12px;font-weight:900;letter-spacing:1px}}
 .news-stamp strong{{display:block;font-size:25px;color:#fff;margin-bottom:4px}}
+.news-mode-toggle{{display:flex;flex-direction:row;align-items:center;gap:7px;color:#fef3c7;font-weight:800;font-size:13px;white-space:nowrap}}
+.news-mode-toggle input{{width:17px;height:17px;accent-color:#fbbf24}}
+.news-fullscreen{{position:fixed;inset:0;z-index:1000;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:5vh 7vw;background:radial-gradient(circle at top right,#92400e,#422006 48%,#07111f 100%);color:#fff;overflow:hidden}}
+.news-fullscreen[hidden]{{display:none}}
+.news-fullscreen .full-category{{font-size:clamp(24px,2.4vw,42px);font-weight:900;letter-spacing:2px;text-transform:uppercase;color:#fde68a;margin-bottom:2vh}}
+.news-fullscreen .full-title{{font-size:clamp(38px,4.5vw,82px);line-height:1.1;font-weight:900;margin:0 0 2vh;max-width:1500px;overflow-wrap:anywhere}}
+.news-fullscreen .full-meta{{font-size:clamp(18px,1.5vw,28px);color:#fde68a;margin-bottom:3vh}}
+.news-fullscreen .full-body{{font-size:clamp(24px,2.4vw,44px);line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere;max-width:1500px;max-height:52vh;overflow:auto}}
+.news-fullscreen .full-attachment{{margin-top:2vh;font-size:clamp(18px,1.4vw,26px);font-weight:800;color:#fde68a}}
+.news-fullscreen img{{max-width:min(55vw,700px);max-height:25vh;object-fit:contain;margin-top:2vh;border-radius:12px;background:#fff;padding:8px}}
 .upcoming-panel{{flex:0 0 auto;max-height:280px;overflow:hidden;padding:9px 22px 11px;background:linear-gradient(110deg,#422006,#7c2d12 48%,#1e293b);border-bottom:2px solid #fbbf24}}
 .upcoming-panel[hidden]{{display:none}}
 .upcoming-head{{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:7px;color:#fff7ed}}
@@ -464,6 +475,14 @@ button{{background:#0ea5e9;color:#001a2a;border:none;border-radius:8px;padding:1
   <div class="upcoming-head"><div><strong id="upcomingTitle">⏭ PROCHAIN CRÉNEAU</strong><span id="upcomingMeta"></span></div><span class="upcoming-count" id="upcomingCount"></span></div>
   <div class="upcoming-cards" id="upcomingCards"></div>
 </section>
+<section class="news-fullscreen" id="newsFullscreen" hidden aria-live="polite">
+  <div class="full-category" id="fullNewsCategory">AVIS</div>
+  <h2 class="full-title" id="fullNewsTitle"></h2>
+  <div class="full-meta" id="fullNewsMeta"></div>
+  <div class="full-body" id="fullNewsBody"></div>
+  <a class="full-attachment" id="fullNewsAttachment" hidden target="_blank" rel="noopener noreferrer"></a>
+  <img id="fullNewsImage" alt="Illustration de la publication" hidden>
+</section>
 <main id="board" aria-live="polite"></main><footer class="foot"><span>Université Djillali Liabès · Faculté de Génie Électrique</span><span>Affichage TV — actualisé dans cette page</span></footer>
 <script>
 const DATA={data_js};
@@ -571,6 +590,48 @@ function syncTeacherPicker(){{let names=getSelectedTeachers(),button=document.ge
 function initTeacherPicker(){{let host=document.getElementById('teacherCheckboxes');if(!host)return;let names=[...new Set(DATA.flatMap(r=>teacherNames(r.Enseignants)).filter(Boolean))].sort(natural);names.forEach((name,i)=>{{let label=document.createElement('label');label.className='teacher-option';label.dataset.search=teacherKey(name);let box=document.createElement('input');box.type='checkbox';box.value=name;box.id='teacher-option-'+i;box.addEventListener('change',()=>{{disableAutomaticMode();syncTeacherPicker();updateRender();}});let txt=document.createElement('span');txt.textContent=name;label.append(box,txt);host.appendChild(label);}});let toggle=document.getElementById('teacherToggle'),options=document.getElementById('teacherOptions'),search=document.getElementById('teacherSearch');toggle?.addEventListener('click',()=>{{let open=options.hidden;options.hidden=!open;toggle.setAttribute('aria-expanded',String(open));if(open)search?.focus();}});search?.addEventListener('input',()=>{{let q=teacherKey(search.value);host.querySelectorAll('.teacher-option').forEach(el=>{{el.style.display=el.dataset.search.includes(q)?'flex':'none';}});}});document.getElementById('teacherClear')?.addEventListener('click',()=>{{disableAutomaticMode();host.querySelectorAll('input[type="checkbox"]').forEach(b=>b.checked=false);syncTeacherPicker();updateRender();}});document.addEventListener('click',ev=>{{let picker=document.getElementById('teacherPicker');if(picker&&!picker.contains(ev.target)){{options.hidden=true;toggle?.setAttribute('aria-expanded','false');}}}});syncTeacherPicker();}}
 function renderNews(index){{let panel=document.getElementById('newsPanel');if(!panel)return;if(!NEWS.length){{panel.hidden=true;return;}}let item=NEWS[index%NEWS.length];panel.hidden=false;document.getElementById('newsCategory').textContent=item.category||'Avis';document.getElementById('newsTitle').textContent=item.title||'Information';document.getElementById('newsMeta').textContent=[item.audience||'Étudiants et enseignants',item.created_at?'Publié le '+item.created_at:''].filter(Boolean).join(' · ');document.getElementById('newsBody').textContent=item.body||'';let link=document.getElementById('newsAttachment'),img=document.getElementById('newsImage');link.hidden=true;link.removeAttribute('href');img.hidden=true;img.removeAttribute('src');if(item.attachment_data&&item.attachment_name){{link.href=item.attachment_data;link.download=item.attachment_name;link.textContent='📎 Ouvrir / télécharger : '+item.attachment_name;link.hidden=false;if(String(item.attachment_mime||'').startsWith('image/')){{img.src=item.attachment_data;img.alt=item.attachment_name;img.hidden=false;}}}}}}
 let newsIndex=0;renderNews(newsIndex);if(NEWS.length>1)setInterval(()=>{{newsIndex=(newsIndex+1)%NEWS.length;renderNews(newsIndex);}},14000);
+// Mode optionnel : une publication en plein écran, puis retour automatique à l'EDT.
+let fullNewsTimer=null, fullNewsShowing=false, fullNewsIndex=0;
+const fullNewsToggle=document.getElementById('newsFullMode');
+const fullNewsPanel=document.getElementById('newsFullscreen');
+function fillFullNews(index){{
+  const item=NEWS[index%NEWS.length];
+  document.getElementById('fullNewsCategory').textContent=item.category||'Avis';
+  document.getElementById('fullNewsTitle').textContent=item.title||'Information';
+  document.getElementById('fullNewsMeta').textContent=[item.audience||'Étudiants et enseignants',item.created_at?'Publié le '+item.created_at:''].filter(Boolean).join(' · ');
+  document.getElementById('fullNewsBody').textContent=item.body||'';
+  const link=document.getElementById('fullNewsAttachment'),img=document.getElementById('fullNewsImage');
+  link.hidden=true;link.removeAttribute('href');img.hidden=true;img.removeAttribute('src');
+  if(item.attachment_data&&item.attachment_name){{
+    link.href=item.attachment_data;link.download=item.attachment_name;link.textContent='📎 Ouvrir / télécharger : '+item.attachment_name;link.hidden=false;
+    if(String(item.attachment_mime||'').startsWith('image/')){{img.src=item.attachment_data;img.alt=item.attachment_name;img.hidden=false;}}
+  }}
+}}
+function stopFullNewsCycle(){{
+  if(fullNewsTimer){{clearTimeout(fullNewsTimer);fullNewsTimer=null;}}
+  fullNewsShowing=false;if(fullNewsPanel)fullNewsPanel.hidden=true;
+}}
+function scheduleFullNewsCycle(delay){{
+  if(fullNewsTimer)clearTimeout(fullNewsTimer);
+  fullNewsTimer=setTimeout(()=>{{
+    if(!fullNewsToggle||!fullNewsToggle.checked||!NEWS.length){{stopFullNewsCycle();return;}}
+    if(!fullNewsShowing){{
+      fillFullNews(fullNewsIndex);fullNewsPanel.hidden=false;fullNewsShowing=true;
+      fullNewsTimer=setTimeout(()=>{{
+        fullNewsPanel.hidden=true;fullNewsShowing=false;fullNewsIndex=(fullNewsIndex+1)%NEWS.length;
+        scheduleFullNewsCycle(45000);
+      }},12000);
+    }}else{{fullNewsPanel.hidden=true;fullNewsShowing=false;scheduleFullNewsCycle(45000);}}
+  }},delay);
+}}
+if(fullNewsToggle){{
+  if(NEWS.length){{scheduleFullNewsCycle(15000);}}
+  else{{fullNewsToggle.checked=false;fullNewsToggle.disabled=true;fullNewsToggle.parentElement.title='Aucun avis ou annonce actif : mode indisponible';}}
+  fullNewsToggle.addEventListener('change',()=>{{
+    stopFullNewsCycle();
+    if(fullNewsToggle.checked&&NEWS.length)scheduleFullNewsCycle(1000);
+  }});
+}}
 if(document.getElementById('f-day')){{fillSelect('f-day','Tous les jours',uniqueSorted('Jours'));fillSelect('f-time','Tous les créneaux',['Matin','Après-midi',...uniqueSorted('Horaire',true)]);fillSelect('f-dept','Tous les départements',uniqueSorted('Département'));fillSelect('f-kind','Tous les enseignements',['Cours','TD','TP','Atelier','Cours + TD','TD + TP','Cours + TP']);const daySelect=document.getElementById('f-day');const today=normalizeKey(pcDayName());const todayOpt=[...daySelect.options].find(o=>normalizeKey(o.value)===today);if(todayOpt)daySelect.value=todayOpt.value;const deptSelect=document.getElementById('f-dept');const eltOpt=[...deptSelect.options].find(o=>normalizeKey(o.value)===normalizeKey(DEFAULT_DEPARTMENT));if(eltOpt)deptSelect.value=eltOpt.value;const promoSelect=document.getElementById('f-promo');function refreshPromotionOptions(){{const previous=promoSelect.value;const options=promotionsForDepartment(deptSelect.value);fillSelect('f-promo','Toutes les promotions',options);promoSelect.value=options.includes(previous)?previous:'';}}refreshPromotionOptions();deptSelect.addEventListener('change',()=>{{refreshPromotionOptions();disableAutomaticMode();updateRender();}});initTeacherPicker();const autoEl=document.getElementById('autoDaily');if(autoEl){{autoMode=autoEl.checked;autoEl.addEventListener('change',()=>{{autoMode=autoEl.checked;autoDateKey='';autoRenderedSignature='';updateRender();}});}}document.getElementById('apply').addEventListener('click',()=>{{disableAutomaticMode();updateRender();}});['f-day','f-time','f-promo','f-kind'].forEach(id=>document.getElementById(id).addEventListener('change',()=>{{disableAutomaticMode();updateRender();}}));}}
 let speedEl=document.getElementById('speed');if(speedEl){{speedEl.value=INITIAL_SPEED;speedEl.addEventListener('input',()=>{{speed=Number(speedEl.value);}});}}
 let viewEl=document.getElementById('view');if(viewEl){{viewEl.value=activeLayout;viewEl.addEventListener('change',()=>{{activeLayout=viewEl.value;updateRender();}});}}
