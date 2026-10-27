@@ -395,6 +395,57 @@ button{{background:#0ea5e9;color:#001a2a;border:none;border-radius:8px;padding:1
 .grid-item strong{{display:block;color:white;margin-bottom:4px}} .grid-item small{{color:#f1f5f9}}
 .empty{{text-align:center;color:#cbd5e1;padding:60px 20px;font-size:clamp(20px,2vw,32px)}} .foot{{padding:7px 20px;background:#06101d;color:#8fa8c4;font-size:12px;display:flex;justify-content:space-between;gap:12px}}
 @media(max-width:800px){{.top{{align-items:flex-start;flex-direction:column}} .clock{{text-align:left}} .filters label{{width:100%}} .filters select{{max-width:none;width:100%}} .status{{margin-left:0}} .grid-table{{table-layout:auto}} .cards{{grid-template-columns:1fr}} .auto-time-heading .slot-count{{margin-left:0}} .upcoming-cards{{grid-template-columns:repeat(2,minmax(0,1fr))}} .upcoming-panel{{padding:8px 12px}} .news-panel{{align-items:flex-start;gap:8px;padding:9px 12px}} .news-stamp{{display:none}} #newsBody{{max-height:60px}}}}
+
+/* TYPOGRAPHIE TV AGRANDIE : priorité à la lecture à distance */
+.brand h1 {{font-size:clamp(30px,2.35vw,50px)!important;line-height:1.08;letter-spacing:.4px}}
+.brand p {{font-size:clamp(18px,1.3vw,26px)!important;line-height:1.25}}
+.clock {{font-size:clamp(30px,2.4vw,48px)!important}}
+.status {{font-size:clamp(16px,1.15vw,24px)!important}}
+.auto-toggle,.auto-badge {{font-size:clamp(15px,1.05vw,22px)!important;padding:12px 16px}}
+#board {{padding:24px 30px 54px}}
+.auto-time-slot {{margin-bottom:36px;padding-bottom:24px}}
+.auto-time-heading {{gap:16px;margin:7px 0 18px;padding:16px 20px;border-radius:13px}}
+.auto-time-heading .slot-state {{font-size:clamp(17px,1.2vw,24px)!important;padding:10px 14px}}
+.auto-time-heading .slot-time {{font-size:clamp(28px,2.3vw,46px)!important;line-height:1.1}}
+.auto-time-heading .slot-count {{font-size:clamp(16px,1.1vw,22px)!important}}
+.cards {{gap:18px}}
+.card {{padding:23px 25px;border-left-width:10px;border-radius:14px}}
+#board .subject {{font-size:clamp(26px,2.25vw,48px)!important;line-height:1.16;margin-bottom:15px;letter-spacing:.1px}}
+#board .badges {{gap:9px;margin-bottom:13px}}
+#board .badge {{font-size:clamp(16px,1.05vw,22px)!important;padding:7px 11px;line-height:1.2}}
+#board .details {{font-size:clamp(20px,1.48vw,34px)!important;line-height:1.32;gap:11px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}}
+#board .details b {{font-weight:900}}
+.day-heading {{font-size:clamp(26px,2vw,40px)!important;line-height:1.15;padding-bottom:12px}}
+.hour-heading {{font-size:clamp(22px,1.65vw,34px)!important}}
+.grid-table th {{font-size:clamp(22px,1.65vw,34px)!important;padding:16px 9px}}
+.grid-item {{font-size:clamp(18px,1.35vw,29px)!important;padding:12px;margin:8px 0;border-left-width:7px;line-height:1.3}}
+.grid-item strong {{font-size:1.1em;line-height:1.2}}
+.grid-item small {{font-size:1em;line-height:1.4}}
+.empty {{font-size:clamp(28px,2.5vw,48px)!important;line-height:1.25}}
+.upcoming-panel {{max-height:340px;padding:14px 24px 16px}}
+.upcoming-head strong {{font-size:clamp(22px,1.7vw,34px)!important}}
+#upcomingMeta {{font-size:clamp(18px,1.3vw,27px)!important}}
+.upcoming-count {{font-size:clamp(16px,1.05vw,22px)!important}}
+.upcoming-cards {{gap:10px;max-height:265px}}
+.upcoming-cards .card {{padding:12px 14px}}
+.upcoming-cards .subject {{font-size:clamp(18px,1.35vw,28px)!important;line-height:1.2}}
+.upcoming-cards .badge {{font-size:clamp(14px,.95vw,19px)!important;padding:5px 7px}}
+.upcoming-cards .details {{font-size:clamp(15px,1.05vw,22px)!important;grid-template-columns:1fr;line-height:1.3}}
+.news-title {{font-size:clamp(22px,1.7vw,34px)!important}}
+#newsBody {{font-size:clamp(18px,1.3vw,27px)!important;max-height:110px;line-height:1.3}}
+.news-category {{font-size:clamp(15px,1vw,20px)!important;padding:6px 10px}}
+@media(max-width:800px) {{
+  .brand h1 {{font-size:30px!important}}
+  .brand p {{font-size:18px!important}}
+  .clock {{font-size:30px!important}}
+  #board {{padding:16px 12px 36px}}
+  .cards {{grid-template-columns:1fr}}
+  #board .subject {{font-size:26px!important}}
+  #board .details {{font-size:20px!important;grid-template-columns:1fr}}
+  .auto-time-heading .slot-time {{font-size:28px!important}}
+  .upcoming-cards {{grid-template-columns:1fr}}
+}}
+
 </style></head>
 <body>
 <header class="top"><div class="brand"><h1>{htmlmod.escape(title)}</h1><p>{htmlmod.escape(subtitle)}</p></div><div class="clock"><span id="clock">--:--:--</span><small id="date"></small></div></header>
