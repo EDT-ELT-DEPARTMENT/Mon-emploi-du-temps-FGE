@@ -2929,82 +2929,26 @@ def _lieux_creneau_key(txt):
 
 
 def _lieux_horaires_dynamiques(df, horaires_reference):
-    """Liste des créneaux horaires à utiliser pour la correspondance
-    « Lieux Non Occupés », déterminée de façon FLEXIBLE à partir de la
-    colonne « Horaire » du fichier source Data (donc selon les EDT déjà
-    générés pour TOUTES les promotions).
-
-    Cohérente avec _lieux_occups (correspondance par CHEVAUCHEMENT
-    HORAIRE REEL, pas par égalité stricte de libellé) :
-      - un horaire de la liste de référence n'est conservé que s'il est
-        réellement utilisé, OU CHEVAUCHÉ dans le temps par au moins une
-        séance des données sources (sinon c'est un créneau « fantôme »
-        toujours vide, donc toujours compté comme libre pour tous les
-        lieux, ce qui fausse le comptage) ;
-      - un horaire présent dans les données dont la plage horaire ne
-        chevauche AUCUN horaire de référence (un créneau réellement
-        nouveau, par ex. un cours du soir) est ajouté automatiquement.
-    Résultat trié chronologiquement (heure de début)."""
+    """Retourne tous les horaires distincts réellement présents dans la
+    colonne Horaire, y compris les créneaux d'une heure et les formats
+    inhabituels. Les libellés source sont conservés tels quels et triés
+    chronologiquement lorsque leur intervalle est analysable."""
     if df is None or not hasattr(df, "columns") or "Horaire" not in df.columns:
         return list(horaires_reference)
 
-    bornes_ref = {h: _lieux_parse_intervalle(h) for h in horaires_reference}
-    normes_ref = {_lieux_norm_creneau(h): h for h in horaires_reference}
-
-    valeurs_reelles = []
-    for v in df["Horaire"].dropna().unique():
-        v_norm = _lieux_norm_creneau(v)
-        if v_norm == "vide":
+    valeurs = []
+    vus = set()
+    for valeur in df["Horaire"].dropna().tolist():
+        brut = str(valeur).strip()
+        cle = _lieux_norm_creneau(brut)
+        if not brut or cle == "vide" or cle in vus:
             continue
-        d_v, f_v = _lieux_parse_intervalle(v)
-        valeurs_reelles.append((v_norm, str(v).strip(), d_v, f_v))
+        vus.add(cle)
+        valeurs.append(brut)
 
-    if not valeurs_reelles:
+    if not valeurs:
         return list(horaires_reference)
-
-    def _chevauche_ref(d_v, f_v, d_ref, f_ref):
-        if None in (d_v, f_v, d_ref, f_ref):
-            return False
-        return d_v < f_ref and d_ref < f_v
-
-    # 1) Créneaux de référence réellement utilisés (libellé identique)
-    #    ou chevauchés (plage horaire différente mais qui se recoupe)
-    #    par au moins une séance des données sources.
-    conserves = []
-    for h in horaires_reference:
-        v_norm_h = _lieux_norm_creneau(h)
-        d_h, f_h = bornes_ref[h]
-        utilise = any(
-            v_norm == v_norm_h or _chevauche_ref(d_v, f_v, d_h, f_h)
-            for (v_norm, v_brut, d_v, f_v) in valeurs_reelles
-        )
-        if utilise:
-            conserves.append(h)
-
-    # 2) Horaires réellement présents dans les données mais dont la
-    #    plage horaire ne chevauche AUCUN créneau de référence : ce
-    #    sont de véritables nouveaux créneaux, à ajouter tels quels.
-    for (v_norm, v_brut, d_v, f_v) in valeurs_reelles:
-        if v_norm in normes_ref:
-            continue
-        if d_v is None:
-            # Libellé non parsable : ajouté par précaution (repli), pour
-            # ne perdre aucune occupation potentielle.
-            if v_brut not in conserves:
-                conserves.append(v_brut)
-            continue
-        chevauche_qqch = any(
-            _chevauche_ref(d_v, f_v, bornes_ref[h][0], bornes_ref[h][1])
-            for h in horaires_reference
-        )
-        if not chevauche_qqch and v_brut not in conserves:
-            conserves.append(v_brut)
-
-    if not conserves:
-        return list(horaires_reference)
-
-    return sorted(set(conserves), key=_lieux_creneau_key)
-
+    return sorted(valeurs, key=_lieux_creneau_key)
 
 
 def _lieux_jours_dynamiques(df, jours_reference):
@@ -3661,7 +3605,7 @@ def run_Assiduité():
 <p style="margin:8px 0 0 0;opacity:0.9;font-size:13px;">Plateforme de Suivi d'Assiduité - année 2026-2027</p>
 </div>
 <div style="background:#fef2f2;border-left:5px solid #ef4444;padding:15px;margin:20px;color:#991b1b;font-weight:600;">
-{"Signalement : l'étudiant " + str(nom_etud) + " a été déclaré absent lors d'une séance de cours." if notification_admin else "Vous avez été signalé(e) absent(e) lors d'une séance obligatoire."}
+{"Signalement : l'étudiant " + str(nom_etud) + " a été déclaré absent lors d'une séance obligatoire." if notification_admin else "Vous avez été signalé(e) absent(e) lors d'une séance obligatoire."}
 </div>
 <div style="padding:20px 30px;">
 <p style="color:#334155;margin-bottom:20px;">{"Bonjour, équipe de suivi de l'assiduité," if notification_admin else "Salem " + str(nom_etud) + ","}</p>
@@ -4157,11 +4101,117 @@ Cet email est généré automatiquement - merci de ne pas y répondre.
                         st.warning("⚠️ Aucune promotion trouvée pour cette matière.")
                         promo_c = ""
         
-        # ✨ MODIFICATION: Utiliser df_etudiants_tous au lieu de filtrer par une seule promotion
+        # Filtrage pédagogique des étudiants selon le groupe TD ou sous-groupe TP.
+        # Le groupe est extrait du suffixe exact de la matière EDT : TD-...-G2 / TP-...-SG11.
         if sel_mat and promo_c:
             if not df_etudiants_tous.empty:
-                noms_e = sorted(df_etudiants_tous["Nom_Complet"].tolist())
-                st.info(f"📍 **{len(noms_e)}** étudiants total(es) des promotion(s) concernée(s)")
+                df_etudiants_promo = df_etudiants_tous.copy()
+                nb_etudiants_promo = len(df_etudiants_promo)
+                df_etudiants_selection = df_etudiants_promo.copy()
+                type_matiere_abs = "AUTRE"
+                groupe_matiere_abs = None
+                sous_groupes_matiere_abs = set()
+                matiere_abs_upper = str(sel_mat).strip().upper()
+
+                m_td_abs = re.match(r"^\s*TD\s*[-:]", matiere_abs_upper)
+                m_tp_abs = re.match(r"^\s*TP\s*[-:]", matiere_abs_upper)
+                if m_td_abs:
+                    type_matiere_abs = "TD"
+                    m_groupe_abs = re.search(r"(?:^|[-_\s(])G\s*[-_ ]?(\d+)\s*\)?\s*$", matiere_abs_upper)
+                    if m_groupe_abs:
+                        groupe_matiere_abs = f"G{int(m_groupe_abs.group(1))}"
+                elif m_tp_abs:
+                    type_matiere_abs = "TP"
+                    sous_groupes_matiere_abs = {
+                        f"SG{int(n)}" for n in re.findall(r"SG\s*[-_ ]?(\d+)", matiere_abs_upper)
+                    }
+
+                def _normaliser_code_groupe_abs(valeur, prefixe):
+                    """G2 / Groupe 2 / G02 / 2 -> « G2 » ; SG11 / SG 11 / G2-SG11 / 11 -> « SG11 »."""
+                    if pd.isna(valeur):
+                        return ""
+                    texte = str(valeur).strip().upper()
+                    if not texte or texte in {"NAN", "NONE", "NON DÉFINI", "NON DEFINI", "N/A"}:
+                        return ""
+                    if prefixe == "SG":
+                        trouve = re.search(r"SG\s*[-_ .]?\s*(\d+)", texte) or re.search(r"(\d+)", texte)
+                    else:
+                        trouve = (re.search(r"(?<![A-Z])G(?:ROUPE|RP)?\s*[-_ .]?\s*(\d+)", texte)
+                                  or re.search(r"(\d+)", texte))
+                    return f"{prefixe}{int(trouve.group(1))}" if trouve else ""
+
+                def _repartition_effectifs_abs(df_source, colonne, prefixe):
+                    """Effectif de chaque groupe (G1, G2…) ou sous-groupe (SG1, SG2…) de la promotion."""
+                    if not colonne or df_source.empty:
+                        return {}
+                    codes = df_source[colonne].map(lambda v: _normaliser_code_groupe_abs(v, prefixe))
+                    comptes = codes[codes != ""].value_counts()
+                    return dict(sorted(comptes.items(), key=lambda kv: int(re.sub(r"\D", "", kv[0]) or 0)))
+
+                colonnes_groupes_abs = detecter_colonnes_etudiant(df_etudiants_promo)
+                col_groupe_abs = colonnes_groupes_abs.get("groupe")
+                col_sous_groupe_abs = colonnes_groupes_abs.get("sous_groupe")
+                filtre_groupe_applique = False
+
+                if type_matiere_abs == "TD" and groupe_matiere_abs:
+                    if col_groupe_abs:
+                        masque_groupe_abs = df_etudiants_promo[col_groupe_abs].map(
+                            lambda v: _normaliser_code_groupe_abs(v, "G") == groupe_matiere_abs
+                        )
+                        df_etudiants_selection = df_etudiants_promo[masque_groupe_abs].copy()
+                        filtre_groupe_applique = True
+                        st.info(f"👥 Matière TD du groupe **{groupe_matiere_abs}**")
+                    else:
+                        st.error("La colonne Groupe est introuvable dans le fichier des étudiants : impossible de filtrer correctement cette matière TD.")
+                elif type_matiere_abs == "TP" and sous_groupes_matiere_abs:
+                    if col_sous_groupe_abs:
+                        masque_sg_abs = df_etudiants_promo[col_sous_groupe_abs].map(
+                            lambda v: _normaliser_code_groupe_abs(v, "SG") in sous_groupes_matiere_abs
+                        )
+                        df_etudiants_selection = df_etudiants_promo[masque_sg_abs].copy()
+                        filtre_groupe_applique = True
+                        st.info("🔹 Matière TP — sous-groupe(s) : **" + ", ".join(sorted(sous_groupes_matiere_abs)) + "**")
+                    else:
+                        st.error("La colonne Sous groupe est introuvable dans le fichier des étudiants : impossible de filtrer correctement cette matière TP.")
+
+                if type_matiere_abs in {"TD", "TP"} and not filtre_groupe_applique:
+                    noms_e = []
+                    st.warning("La sélection des étudiants est bloquée pour éviter de signaler une absence à toute la promotion par erreur.")
+                else:
+                    noms_e = sorted(df_etudiants_selection["Nom_Complet"].dropna().astype(str).unique().tolist())
+
+                if type_matiere_abs in {"TD", "TP"}:
+                    est_td_abs = type_matiere_abs == "TD"
+                    codes_cibles_abs = ({groupe_matiere_abs} if (est_td_abs and groupe_matiere_abs)
+                                        else set(sous_groupes_matiere_abs))
+                    repartition_abs = _repartition_effectifs_abs(
+                        df_etudiants_promo,
+                        col_groupe_abs if est_td_abs else col_sous_groupe_abs,
+                        "G" if est_td_abs else "SG",
+                    )
+                    col_metric_promo, col_metric_cible = st.columns(2)
+                    with col_metric_promo:
+                        st.metric("🎓 Effectif total de la promotion", nb_etudiants_promo)
+                    with col_metric_cible:
+                        if codes_cibles_abs:
+                            libelle_effectif = (("👥 Effectif du groupe " if est_td_abs else "🔹 Effectif du sous-groupe ")
+                                                + ", ".join(sorted(codes_cibles_abs)))
+                        else:
+                            libelle_effectif = ("👥 Effectif du groupe (non détecté)" if est_td_abs
+                                                else "🔹 Effectif du sous-groupe (non détecté)")
+                        st.metric(libelle_effectif, len(noms_e))
+                    if repartition_abs:
+                        titre_repartition = "Répartition par groupe de TD" if est_td_abs else "Répartition par sous-groupe de TP"
+                        morceaux_repartition = [
+                            f"**{code} : {nb} ◀**" if code in codes_cibles_abs else f"{code} : {nb}"
+                            for code, nb in repartition_abs.items()
+                        ]
+                        st.caption(f"📊 {titre_repartition} (promotion entière) — " + " · ".join(morceaux_repartition))
+                    if filtre_groupe_applique:
+                        st.caption(f"La liste de signalement ci-dessous est limitée à {len(noms_e)} étudiant(s) de cette sélection.")
+                else:
+                    st.info(f"🎓 **{nb_etudiants_promo}** étudiants dans la promotion concernée")
+                    st.caption(f"Effectif concerné par cette matière : {len(noms_e)} étudiant(s).")
 
                 if MODE_SUPABASE:
                     absences_filtrees = charger_absences_supabase(sel_mat, promo_c)
@@ -4184,21 +4234,22 @@ Cet email est généré automatiquement - merci de ne pas y répondre.
                 cn1, cn2, cn3 = st.columns(3)
                 with cn1:
                     etud_non = st.selectbox(
-                        "👤 Étudiant ou type d'absence :",
-                        ["", "👥 ABSENCE COLLECTIVE — tous les étudiants"] + noms_e,
+                        f"👤 Étudiant ou type d'absence ({len(noms_e)} étudiant(s) dans cette sélection) :",
+                        ["", "👥 ABSENCE COLLECTIVE — tous les étudiants du groupe sélectionné"] + noms_e,
                         key="ne_et_t1",
-                        help="Choisissez l'absence collective pour enregistrer la même absence pour tous les étudiants de la promotion concernée."
+                        help="Pour un TD/TP, l'absence collective concerne uniquement les étudiants du groupe/sous-groupe sélectionné. Pour un cours commun, elle concerne les étudiants de la promotion."
                     )
-                    absence_collective = etud_non == "👥 ABSENCE COLLECTIVE — tous les étudiants"
+                    absence_collective = etud_non == "👥 ABSENCE COLLECTIVE — tous les étudiants du groupe sélectionné"
                     if etud_non and not absence_collective and col_mat_bac:
-                        mat_bac_val = df_etudiants_tous[df_etudiants_tous["Nom_Complet"] == etud_non][col_mat_bac]
+                        mat_bac_val = df_etudiants_selection[df_etudiants_selection["Nom_Complet"] == etud_non][col_mat_bac]
                         if not mat_bac_val.empty:
                             mat_bac_str = str(mat_bac_val.iloc[0])
                             st.markdown(f"<div style='background:linear-gradient(90deg,#1E3A8A,#3B82F6);color:white;padding:6px 12px;border-radius:6px;font-size:13px;font-weight:600;text-align:center;margin-top:4px;'>🎓 Mat. BAC : {mat_bac_str}</div>", unsafe_allow_html=True)
                 with cn2:
                     status_assid = st.selectbox("📊 Statut :", ["", "Absent"], key="status_t1")
-                with cn3:
-                    cause_s = st.selectbox("❓ Motif :", CAUSES_ABSENCES, key="cause_t1")
+                # Le motif n'est plus demandé à la saisie. On conserve une valeur
+                # par défaut pour la compatibilité avec les anciennes colonnes Supabase.
+                cause_s = "Non justifiee"
 
                 c_d1, c_d2, c_d3 = st.columns(3)
                 with c_d1:
@@ -4210,7 +4261,7 @@ Cet email est généré automatiquement - merci de ne pas y répondre.
 
                 if absence_collective:
                     st.warning(
-                        f"👥 **Absence collective sélectionnée** : l'absence sera enregistrée pour les **{len(noms_e)}** étudiant(s) de la/des promotion(s) concernée(s)."
+                        f"👥 **Absence collective sélectionnée** : l'absence sera enregistrée pour les **{len(noms_e)}** étudiant(s) correspondant à la sélection pédagogique."
                     )
 
                 # ─── COMPTEUR NUMÉRIQUE D'ABSENCES ───
@@ -4286,7 +4337,7 @@ Cet email est généré automatiquement - merci de ne pas y répondre.
                 col_btn1, col_btn2, col_btn3 = st.columns(3)
                 
                 with col_btn1:
-                    if st.button("💾 ENREGISTRER L'ABSENCE", use_container_width=True, type="primary"):
+                    if st.button("💾 ENREGISTRER L'ABSENCE", use_container_width=True, type="primary", disabled=(not noms_e)):
                         if absence_collective:
                             if status_assid != "Absent":
                                 st.warning("⚠️ L'enregistrement collectif nécessite le statut 'Absent'.")
@@ -11053,20 +11104,32 @@ td{{word-wrap:break-word;}}
                     key="lieu_chevauchement_admin"
                 )
 
-                df_lieu_chev = df[df["Lieu"] == lieu_chevauchement].copy()
-                df_lieu_chev['h_norm'] = df_lieu_chev['Horaire'].apply(normalize)
-                df_lieu_chev['j_norm'] = df_lieu_chev['Jours'].apply(normalize)
+                df_lieu_chev = df[df["Lieu"].astype(str).str.strip() == str(lieu_chevauchement).strip()].copy()
+                horaires_chev_list = _lieux_horaires_dynamiques(df_lieu_chev, horaires_list)
+                jours_chev_list = _lieux_jours_dynamiques(df_lieu_chev, jours_list)
 
-                # Regroupement de toutes les séances de ce lieu par
-                # cellule (Jour, Horaire) — tous enseignants et promotions
-                # confondus.
+                # Une cellule reçoit toutes les séances du même jour dont
+                # l'intervalle réel recouvre le créneau affiché. Ainsi, un
+                # créneau source d'une heure est traité comme les autres.
                 cellules_chev = {}
-                for (j_n, h_n), groupe in df_lieu_chev.groupby(['j_norm', 'h_norm']):
-                    j_aff = map_j.get(j_n)
-                    h_aff = map_h.get(h_n)
-                    if j_aff is None or h_aff is None:
-                        continue
-                    cellules_chev[(j_aff, h_aff)] = groupe
+                for jour_aff in jours_chev_list:
+                    jour_norm = _lieux_norm_creneau(jour_aff)
+                    lignes_jour = df_lieu_chev[
+                        df_lieu_chev["Jours"].map(_lieux_norm_creneau) == jour_norm
+                    ]
+                    for horaire_aff in horaires_chev_list:
+                        debut_c, fin_c = _lieux_parse_intervalle(horaire_aff)
+                        selection = []
+                        for idx_ligne, ligne in lignes_jour.iterrows():
+                            debut_s, fin_s = _lieux_parse_intervalle(ligne.get("Horaire", ""))
+                            if None not in (debut_c, fin_c, debut_s, fin_s):
+                                touche = debut_s < fin_c and debut_c < fin_s
+                            else:
+                                touche = _lieux_norm_creneau(ligne.get("Horaire", "")) == _lieux_norm_creneau(horaire_aff)
+                            if touche:
+                                selection.append(idx_ligne)
+                        if selection:
+                            cellules_chev[(jour_aff, horaire_aff)] = df_lieu_chev.loc[selection].copy()
 
                 def _nature_chev(code):
                     """Nature normalisée d'une séance (COURS / TD / TP / AUTRE)."""
@@ -11196,7 +11259,7 @@ td{{word-wrap:break-word;}}
                     "<tr><th style='background:#1E3A8A;color:white;padding:8px;"
                     "width:110px;'>JOUR \\ HORAIRE</th>"
                 )
-                for h in horaires_list:
+                for h in horaires_chev_list:
                     thead_chev += (
                         f"<th style='background:#1E3A8A;color:white;padding:8px;"
                         f"font-size:11px;'>{h}</th>"
@@ -11204,12 +11267,12 @@ td{{word-wrap:break-word;}}
                 thead_chev += "</tr>"
 
                 tbody_chev = ""
-                for j in jours_list:
+                for j in jours_chev_list:
                     tbody_chev += (
                         f"<tr><td style='background:#f1f5f9;font-weight:bold;"
                         f"text-align:center;padding:8px;'>{j}</td>"
                     )
-                    for h in horaires_list:
+                    for h in horaires_chev_list:
                         groupe = cellules_chev.get((j, h))
                         if groupe is None or groupe.empty:
                             tbody_chev += (
@@ -11585,9 +11648,9 @@ td{{word-wrap:break-word;}}
                 buf_xl_chev = io.BytesIO()
                 with pd.ExcelWriter(buf_xl_chev, engine='xlsxwriter') as writer:
                     data_excel_chev = []
-                    for j in jours_list:
+                    for j in jours_chev_list:
                         ligne = {"JOUR": j}
-                        for h in horaires_list:
+                        for h in horaires_chev_list:
                             groupe = cellules_chev.get((j, h))
                             ligne[h] = _contenu_cellule_texte_chev(groupe)
                         data_excel_chev.append(ligne)
@@ -14179,16 +14242,45 @@ td{{word-wrap:break-word;}}
             "par un liseré doré."
         )
 
+        # Filtrage supplémentaire par département pour consulter les EDT
+        # de l'établissement département par département.
+        _col_dept_consult = next(
+            (c for c in df.columns if str(c).strip().casefold() in
+             {"département", "departement", "department"}),
+            None
+        )
+        df_consult_dept = df.copy()
+        if _col_dept_consult:
+            _departements_disponibles_consult = sorted([
+                str(v).strip() for v in df[_col_dept_consult].dropna().unique()
+                if str(v).strip() and str(v).strip().casefold() not in {"nan", "non défini", "non defini"}
+            ], key=str.casefold)
+            if _departements_disponibles_consult:
+                departement_recherche_ens = st.selectbox(
+                    "🏛️ Choisir un département :",
+                    ["Tous les départements"] + _departements_disponibles_consult,
+                    key="departement_recherche_ens_toutes"
+                )
+                if departement_recherche_ens != "Tous les départements":
+                    df_consult_dept = df_consult_dept[
+                        df_consult_dept[_col_dept_consult].astype(str).str.strip()
+                        == departement_recherche_ens
+                    ].copy()
+            else:
+                st.info("Aucun département renseigné dans les données EDT.")
+        else:
+            st.warning("La colonne 'Département' est absente du fichier EDT : affichage de toutes les promotions.")
+
         toutes_les_promotions_etab = sorted([
-            p for p in df["Promotion"].dropna().unique()
+            p for p in df_consult_dept["Promotion"].dropna().unique()
             if str(p).strip() and str(p).strip() != "Non défini"
-        ])
+        ], key=lambda x: str(x).casefold())
 
         if not toutes_les_promotions_etab:
-            st.info("ℹ️ Aucune promotion trouvée dans les données.")
+            st.info("ℹ️ Aucune promotion trouvée pour le département sélectionné.")
         else:
             promotion_recherchee_ens = st.selectbox(
-                "🎓 Choisir une promotion (liste complète) :",
+                "🎓 Choisir une promotion (selon le département) :",
                 toutes_les_promotions_etab,
                 key="promotion_recherchee_ens_toutes"
             )
@@ -14233,7 +14325,7 @@ td{{word-wrap:break-word;}}
                 m_num = re.search(r'(\d+)', str(code_rg))
                 return int(m_num.group(1)) if m_num else 0
 
-            _df_promo_options_rg = df[df["Promotion"] == promotion_recherchee_ens]
+            _df_promo_options_rg = df_consult_dept[df_consult_dept["Promotion"] == promotion_recherchee_ens]
             _groupes_dispo_rg = set()
             _sg_dispo_rg = set()
             for _, _lg_rg in _df_promo_options_rg.iterrows():
@@ -14273,7 +14365,7 @@ td{{word-wrap:break-word;}}
                     key=f"sous_groupe_recherche_ens_toutes_{promotion_recherchee_ens}_{groupe_recherche_ens}"
                 )
 
-            df_promo_recherchee = df[df["Promotion"] == promotion_recherchee_ens].copy()
+            df_promo_recherchee = df_consult_dept[df_consult_dept["Promotion"] == promotion_recherchee_ens].copy()
             df_promo_recherchee['Type'] = df_promo_recherchee['Code'].apply(
                 lambda x: "COURS" if "COURS" in str(x).upper() else ("TD" if "TD" in str(x).upper() else "TP")
             )
@@ -21033,7 +21125,7 @@ Réinitialiser mon mot de passe
         email_verif = st.text_input(
             "📧 Saisissez votre email",
             key="verif_email_insc_v2",
-            placeholder="ex: nom.prenom@univ-sba.dz"
+            placeholder="Saisir votre Email personnel"
         )
         email_verif_clean = str(email_verif).strip().lower()
         
@@ -23487,6 +23579,93 @@ if df is not None:
                 if not tous_lieux_lx:
                     st.warning("⚠️ Aucun lieu exploitable dans les données EDT.")
                 else:
+                    # ============================================================
+                    # NOUVEL OUTIL : RECHERCHE DES LIEUX LIBRES PAR TYPE,
+                    # JOUR ET CRÉNEAU. Les laboratoires TP sont identifiés
+                    # uniquement à partir des lignes dont Enseignements
+                    # commence réellement par « TP- ».
+                    # ============================================================
+                    st.markdown("### 🔎 Rechercher les lieux disponibles")
+                    st.caption(
+                        "Sélectionnez le type de lieu, le jour et l'horaire. "
+                        "La liste affiche uniquement les lieux libres sur ce créneau. "
+                        "Les laboratoires TP sont repérés à partir des enseignements TP-."
+                    )
+
+                    def _type_lieu_dispo(nom_lieu):
+                        nom = str(nom_lieu).strip().upper()
+                        if any(m in nom for m in ("AMPHI", "AMPHITHEATRE", "AMPHITHÉÂTRE")):
+                            return "Amphi"
+                        return "Salle"
+
+                    lieux_tp_source = set()
+                    if "Enseignements" in df.columns and "Lieu" in df.columns:
+                        masque_tp = df["Enseignements"].fillna("").astype(str).str.strip().str.match(
+                            r"^TP\s*-", case=False, na=False
+                        )
+                        for valeur_lieu_tp in df.loc[masque_tp, "Lieu"].dropna().tolist():
+                            lieux_tp_source.update(_lieux_eclater(valeur_lieu_tp))
+
+                    # Les lieux identifiés dans des séances TP sont classés
+                    # comme laboratoires TP, même si leur nom ne contient
+                    # pas explicitement le mot « labo ».
+                    lieux_par_type_lx = {
+                        "Salles": sorted(l for l in tous_lieux_lx
+                                         if _type_lieu_dispo(l) == "Salle" and l not in lieux_tp_source),
+                        "Amphi": sorted(l for l in tous_lieux_lx
+                                        if _type_lieu_dispo(l) == "Amphi"),
+                        "Labo de TP": sorted(l for l in tous_lieux_lx
+                                             if l in lieux_tp_source),
+                    }
+
+                    f_type_lx, f_jour_lx, f_horaire_lx = st.columns([1.2, 1, 1.3])
+                    type_sel_lx = f_type_lx.selectbox(
+                        "🏷️ Type de lieu :", ["Salles", "Amphi", "Labo de TP"],
+                        key="lx_type_lieu_disponibilite"
+                    )
+                    jour_sel_dispo_lx = f_jour_lx.selectbox(
+                        "📅 Jour :", jours_list_lx, key="lx_jour_disponibilite"
+                    )
+                    horaire_sel_dispo_lx = f_horaire_lx.selectbox(
+                        "🕒 Horaire :", horaires_list_lx, key="lx_horaire_disponibilite"
+                    )
+
+                    candidats_type_lx = lieux_par_type_lx.get(type_sel_lx, [])
+                    lieux_disponibles_type_lx = [
+                        lieu for lieu in candidats_type_lx
+                        if (jour_sel_dispo_lx, horaire_sel_dispo_lx, lieu) not in occupes_lx
+                    ]
+                    lieux_occupes_type_lx = [
+                        lieu for lieu in candidats_type_lx
+                        if (jour_sel_dispo_lx, horaire_sel_dispo_lx, lieu) in occupes_lx
+                    ]
+
+                    k1_lx, k2_lx, k3_lx = st.columns(3)
+                    k1_lx.metric("🟢 Lieux libres", len(lieux_disponibles_type_lx))
+                    k2_lx.metric("🔴 Lieux occupés", len(lieux_occupes_type_lx))
+                    k3_lx.metric("📚 Lieux recensés", len(candidats_type_lx))
+                    if type_sel_lx == "Labo de TP":
+                        st.info(
+                            f"Filtrage TP : {len(candidats_type_lx)} lieu(x) identifié(s) "
+                            "uniquement dans les lignes dont l'enseignement commence par TP-."
+                        )
+                    if lieux_disponibles_type_lx:
+                        st.success(
+                            f"{len(lieux_disponibles_type_lx)} lieu(x) disponible(s) "
+                            f"pour **{type_sel_lx}**, le **{jour_sel_dispo_lx}**, "
+                            f"à **{horaire_sel_dispo_lx}**."
+                        )
+                        st.dataframe(
+                            pd.DataFrame({"Lieu disponible": lieux_disponibles_type_lx}),
+                            use_container_width=True, hide_index=True
+                        )
+                    else:
+                        st.warning(
+                            f"Aucun lieu de type « {type_sel_lx} » n'est libre "
+                            f"le {jour_sel_dispo_lx} à {horaire_sel_dispo_lx}."
+                        )
+                    st.markdown("---")
+
                     cible_lx = st.selectbox(
                         "Lieu à analyser (ex. AS10) :",
                         ["📊 Vue globale — tous les lieux"] + tous_lieux_lx,
@@ -24468,11 +24647,17 @@ if df is not None:
                                 nom_key_famille,
                                 repertoire_source.get(nom_key_complet, None)
                             )
+                            # Téléphone issu du fichier source Permanents-Vacataires.
+                            # Recherche par nom de famille puis par nom complet.
+                            telephone_col = repertoire_telephones.get(
+                                nom_key_famille,
+                                repertoire_telephones.get(nom_key_complet, None)
+                            )
         
                             # Badge couleur selon qualité
                             badge_color = "#22c55e" if "PERMANENT" in str(qualite_col).upper() else "#f59e0b"
         
-                            col1, col2, col3 = st.columns([3, 2, 2])
+                            col1, col2, col3, col4 = st.columns([3, 2, 2.5, 2.5])
                             with col1:
                                 st.markdown(f"**{nom_complet_col}**")
                                 st.caption(f"🏷️ {grade_col}")
@@ -24484,6 +24669,12 @@ if df is not None:
                                     st.markdown(f"📧 `{email_col}`")
                                 else:
                                     st.markdown("<span style='color:#94a3b8; font-size:12px;'>📧 Non communiqué</span>", 
+                                               unsafe_allow_html=True)
+                            with col4:
+                                if telephone_col and str(telephone_col).strip() not in {"", "nan", "None", "N/A"}:
+                                    st.markdown(f"📞 `{telephone_col}`")
+                                else:
+                                    st.markdown("<span style='color:#94a3b8; font-size:12px;'>📞 Non renseigné</span>",
                                                unsafe_allow_html=True)
                             st.markdown("<hr style='margin: 8px 0; border: none; border-top: 1px solid #f1f5f9;'>", 
                                        unsafe_allow_html=True)
