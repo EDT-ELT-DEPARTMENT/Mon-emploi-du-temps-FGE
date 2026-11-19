@@ -11,6 +11,8 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+import sys
+st.caption(f"Python : {sys.version}")
 
 APP_TITLE = "Plateforme d'affichage des EDT — UDL-SBA"
 COLONNES = ["Enseignements", "Code", "Enseignants", "Horaire", "Jours", "Lieu", "Promotion", "Département"]
