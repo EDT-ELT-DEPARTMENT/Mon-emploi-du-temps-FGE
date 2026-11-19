@@ -3,6 +3,8 @@
 Application d'affichage des emplois du temps sur TV, navigateur et clé USB.
 Lancement local : streamlit run app_edt_tv.py
 """
+import sys
+st.caption(f"Python : {sys.version}")
 from __future__ import annotations
 import io, json, re, unicodedata, html as htmlmod, base64, mimetypes, uuid, hmac, os
 from datetime import date, datetime, timedelta
@@ -11,8 +13,6 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-import sys
-st.caption(f"Python : {sys.version}")
 
 APP_TITLE = "Plateforme d'affichage des EDT — UDL-SBA"
 COLONNES = ["Enseignements", "Code", "Enseignants", "Horaire", "Jours", "Lieu", "Promotion", "Département"]
