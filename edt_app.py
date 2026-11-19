@@ -1,6 +1,8 @@
 # =============================================================================
 # IMPORTS UNIFIES
 # =============================================================================
+import sys
+st.caption(f"Python : {sys.version}")
 import urllib.parse
 import unicodedata
 import streamlit as st
