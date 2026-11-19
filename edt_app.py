@@ -1,11 +1,11 @@
 # =============================================================================
 # IMPORTS UNIFIES
 # =============================================================================
-import sys
-st.caption(f"Python : {sys.version}")
 import urllib.parse
 import unicodedata
 import streamlit as st
+import sys
+st.caption(f"Python : {sys.version}")
 
 # Dénomination officielle
 APP_TITLE = (
